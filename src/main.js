@@ -1,4 +1,5 @@
 import './style.css';
+import { initClassroom } from './classroom.js';
 import { detectSlices, mono, trimSamples, encodeWav, demoAudio, MAX_RECORDING } from './audio.js';
 import { listSounds, saveSounds, deleteSound, LIMIT } from './storage.js';
 
@@ -13,10 +14,10 @@ const icons = {
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.wave}</svg>`;
 document.querySelector('#app').innerHTML = `
-<header><a class="brand" href="#"><span class="brand-icon">${icon('wave')}</span><span>Free Impro<small>让每个声音，自由生长</small></span></a><div class="header-right"><span class="local-dot"></span>声音保存在这台设备<span class="student-tag">学生端</span></div></header>
+<header><a class="brand" href="#"><span class="brand-icon">${icon('wave')}</span><span>Free Impro<small>让每个声音，自由生长</small></span></a><div class="header-right"><span class="local-dot"></span>声音保存在这台设备<button id="account-shortcut" class="student-tag">登录 / 注册</button></div></header>
 <main>
   <section class="intro"><div><div class="eyebrow">SOUND EXPLORER / 声音实验室</div><h1>把身边的声音，<br class="mobile-break">变成你的音乐。</h1><p>敲一敲、听一听。发现一个声音，收藏一份灵感。</p></div><div class="intro-art" aria-hidden="true"><span>♪</span><i></i><b>♫</b><em>✦</em></div></section>
-  <nav class="tabs" aria-label="主要功能"><button id="studio-tab" class="tab active" aria-selected="true">${icon('mic')}采集声音</button><button id="library-tab" class="tab" aria-selected="false">${icon('wave')}我的声音库 <span id="library-count">0</span></button></nav>
+  <nav class="tabs" aria-label="主要功能"><button id="studio-tab" class="tab active" aria-selected="true">${icon('mic')}采集声音</button><button id="library-tab" class="tab" aria-selected="false">${icon('wave')}我的声音库 <span id="library-count">0</span></button><button id="classroom-tab" class="tab" aria-selected="false">我的课堂</button></nav>
   <section id="studio-view">
     <div class="steps"><span class="current"><b>1</b>录一段声音</span><i></i><span id="step2"><b>2</b>挑选与裁切</span><i></i><span id="step3"><b>3</b>存入声音库</span></div>
     <div class="studio-grid">
@@ -37,6 +38,7 @@ document.querySelector('#app').innerHTML = `
     </div>
   </section>
   <section id="library-view" hidden><div class="library-top"><div><h2>收藏你的声音灵感</h2><p class="muted">每个声音都能成为下一次创作的起点。<span id="capacity">0 / 200</span></p></div><div class="library-actions"><button id="export" class="secondary">${icon('down')}备份到本地</button><button id="restore" class="secondary">${icon('up')}导入备份</button></div></div><p class="storage-note">保存在当前浏览器中。清除网站数据会删除声音，请定期下载备份。</p><div id="library" class="library-grid"></div></section>
+  <section id="classroom-view" hidden></section>
   <footer><span>听见日常里的不一样。</span><span>FREE IMPRO · 声音采集基础版</span></footer>
 </main><div id="toast" role="status" aria-live="polite" hidden></div>
 <input id="audio-file" type="file" accept="audio/*" hidden><input id="backup-file" type="file" accept=".json,application/json" hidden>
@@ -59,8 +61,11 @@ async function playSamples(samples, rate, button) {
   player.start();
 }
 function setCaptureBusy(value) { busy = value; $('editor').inert = value; ['record', 'demo', 'import-audio'].forEach(id => $(id).disabled = value); }
-function setView(view) { if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); ['studio', 'library'].forEach(v => { $(v + '-view').hidden = v !== view; $(v + '-tab').classList.toggle('active', v === view); $(v + '-tab').setAttribute('aria-selected', String(v === view)); }); }
+function setView(view) { if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); ['studio', 'library', 'classroom'].forEach(v => { $(v + '-view').hidden = v !== view; $(v + '-tab').classList.toggle('active', v === view); $(v + '-tab').setAttribute('aria-selected', String(v === view)); }); }
 $('studio-tab').onclick = () => setView('studio'); $('library-tab').onclick = () => setView('library');
+const classroom = initClassroom({ notify, show: () => setView('classroom'), stopPlayback });
+$('classroom-tab').onclick = () => { setView('classroom'); classroom.refresh(); };
+$('account-shortcut').onclick = () => { setView('classroom'); classroom.refresh(); };
 function endTracks() { clearTimeout(timer); cancelAnimationFrame(meterFrame); stream?.getTracks().forEach(t => t.stop()); stream = null; $('meter').classList.remove('live'); }
 function stopRecording() { if (recorder?.state === 'recording') recorder.stop(); endTracks(); }
 $('record').onclick = async () => {
@@ -206,7 +211,7 @@ $('save-form').onsubmit = async e => {
   try { const samples = trimSamples(source, sampleRate, range.start, range.end); await saveSounds([{ id: crypto.randomUUID(), name, createdAt: Date.now(), duration: samples.length / sampleRate, blob: encodeWav(samples, sampleRate) }]); await refreshLibrary(); $('step3').classList.add('current'); notify(`“${name}”已保存在这台设备`); }
   catch (error) { report(error); } finally { saveBusy = false; $('save').disabled = false; }
 };
-async function refreshLibrary() { library = await listSounds(); $('library-count').textContent = library.length; $('capacity').textContent = `${library.length} / ${LIMIT}`; renderLibrary(); }
+async function refreshLibrary() { library = await listSounds(); $('library-count').textContent = library.length; $('capacity').textContent = `${library.length} / ${LIMIT}`; renderLibrary(); window.dispatchEvent(new Event('sounds-changed')); }
 function renderLibrary() {
   $('library').replaceChildren(); $('export').disabled = !library.length;
   if (!library.length) { const empty = document.createElement('div'); empty.className = 'library-empty'; empty.innerHTML = `<div class="empty-wave">${icon('wave')}</div><h3>第一份声音灵感，等你收藏</h3><p>录一段声音，挑出最喜欢的一声保存到这里。</p><button class="primary">${icon('mic')}去采集声音</button>`; empty.querySelector('button').onclick = () => setView('studio'); $('library').append(empty); return; }
@@ -218,7 +223,7 @@ function renderLibrary() {
     play.onclick = async () => { try { if (play.hasAttribute('data-playing')) { stopPlayback(); return; } const ctx = await getContext(); const buffer = await ctx.decodeAudioData(await sound.blob.arrayBuffer()); await playSamples(buffer.getChannelData(0), buffer.sampleRate, play); } catch (error) { report(error); } };
     card.querySelector('.rename').onclick = () => { renameId = sound.id; $('rename-input').value = sound.name; $('name-dialog').showModal(); };
     card.querySelector('.delete').onclick = () => { deleteId = sound.id; $('delete-dialog').showModal(); };
-    card.querySelector('.download').onclick = () => download(sound.blob, sound.name.replace(/[\\/:*?"<>|]/g, '_') + '.wav'); $('library').append(card);
+    card.querySelector('.download').onclick = () => download(sound.blob, sound.name.replace(/[\\/:*?"<>|]/g, '_') + '.wav'); const submit = document.createElement('button'); submit.className = 'submit-sound secondary'; submit.textContent = '提交到课堂'; submit.onclick = () => classroom.chooseSound(sound); card.querySelector('.sound-details').append(submit); $('library').append(card);
   });
 }
 $('name-dialog').onclose = async () => { if ($('name-dialog').returnValue !== 'save') return; const sound = library.find(s => s.id === renameId), name = $('rename-input').value.trim(); if (!sound || !name) return; try { await saveSounds([{ ...sound, name }]); await refreshLibrary(); notify('名称已更新'); } catch (e) { report(e); } };

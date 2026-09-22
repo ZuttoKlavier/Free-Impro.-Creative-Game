@@ -2,8 +2,8 @@ export const LIMIT = 200;
 let connection;
 export function openStore() {
   if (!connection) connection = new Promise((resolve, reject) => {
-    const request = indexedDB.open('free-impro-student', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('sounds', { keyPath: 'id' });
+    const request = indexedDB.open('free-impro-student', 2);
+    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('sounds')) request.result.createObjectStore('sounds', { keyPath: 'id' }); if (!request.result.objectStoreNames.contains('outbox')) request.result.createObjectStore('outbox', { keyPath: 'key' }); };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => { connection = null; reject(request.error); };
   });
@@ -40,6 +40,18 @@ export async function deleteSound(id) {
     const tx = db.transaction('sounds', 'readwrite');
     tx.objectStore('sounds').delete(id);
     tx.oncomplete = () => resolve();
+    tx.onabort = tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function outbox(action, value) {
+  const db = await openStore();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('outbox', action === 'list' ? 'readonly' : 'readwrite');
+    const store = tx.objectStore('outbox'); let result;
+    const request = action === 'list' ? store.getAll() : action === 'put' ? store.put(value) : store.delete(value);
+    request.onsuccess = () => { result = request.result; };
+    tx.oncomplete = () => resolve(result);
     tx.onabort = tx.onerror = () => reject(tx.error);
   });
 }
