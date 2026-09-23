@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { listSounds, outbox } from './storage.js';
 import './classroom.css';
 import { toDataURL } from './images.js';
+import { teacherRoomMarkup, bindTeacherRoom } from './teacher-room.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const readCache = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
@@ -19,6 +20,7 @@ const audioBase64 = async blob => { const bytes = new Uint8Array(await blob.arra
 export function initClassroom({ notify, show, stopPlayback }) {
   const root = document.getElementById('classroom-view');
   let user = null, rooms = [], selectedRoom = '', sounds = [], queue = [], online = true, refreshing = false, sending = false, authMode = 'login', signature = '', sessionVersion = 0;
+  let teacherBinding = null, layoutVersion = 0;
   const cacheKey = () => `fi-rooms-${user?.id}`;
   const getRoom = () => rooms.find(r => r.id === selectedRoom) || rooms[0];
   const pendingCode = new URLSearchParams(location.search).get('class') || '';
@@ -34,6 +36,8 @@ export function initClassroom({ notify, show, stopPlayback }) {
   function setAuthMode(mode) { authMode = mode; $('register-fields').hidden = mode !== 'register'; $('auth-name').required = mode === 'register'; $('auth-password').autocomplete = mode === 'register' ? 'new-password' : 'current-password'; $('auth-submit').textContent = mode === 'register' ? '注册并登录' : '登录'; $('mode-login').classList.toggle('active', mode === 'login'); $('mode-register').classList.toggle('active', mode === 'register'); $('auth-error').textContent = ''; }
   $('mode-login').onclick = () => setAuthMode('login'); $('mode-register').onclick = () => setAuthMode('register');
   function renderIdentity() {
+    root.querySelector('.class-heading h2').textContent = user?.role === 'teacher' ? '布置一堂声音课堂' : '把你的声音，带进课堂';
+    root.querySelector('.class-heading .muted').textContent = user?.role === 'teacher' ? '设置人数与场景，接收每位学生的声音伙伴。' : '登录后进入老师的课堂，选择一份声音分享。';
     $('auth-panel').hidden = !!user; $('signed-in').hidden = !user;
     document.getElementById('account-shortcut').textContent = user ? user.name : '登录 / 注册';
     $('identity').innerHTML = user ? `<span class="identity-name">${escape(user.name)} · ${user.role === 'teacher' ? '教师' : '学生'}</span><button id="logout" class="text-button">退出账号</button>` : '';
@@ -54,8 +58,9 @@ export function initClassroom({ notify, show, stopPlayback }) {
   $('create-form').onsubmit = event => { event.preventDefault(); action($('create-form'), async () => { const result = await api('/classrooms', { name: $('class-name').value, capacity: Number($('class-capacity').value), background: $('class-background').value }); selectedRoom = result.classroom.id; await refresh(); notify('课堂已创建，把课堂码分享给学生。'); }); };
   $('refresh-class').onclick = () => refresh(true);
   function renderRooms() {
+    if (teacherBinding?.busy) return;
     const state = JSON.stringify({ user: user?.id, rooms, selectedRoom, sending, sounds: sounds.map(s => ({ id: s.id, name: s.name })), queue: queue.map(q => ({ key: q.key, name: q.name, error: q.error })) });
-    if (signature === state) return; signature = state;
+    if (signature === state) return; signature = state; teacherBinding = null;
     $('room-list').innerHTML = rooms.length ? rooms.map(r => `<button class="room-chip ${getRoom()?.id === r.id ? 'active' : ''}" data-room="${escape(r.id)}">${escape(r.name)}<small>${r.memberCount} / ${r.capacity} 人</small></button>`).join('') : '<p class="muted">还没有课堂。创建或输入课堂码后，就会出现在这里。</p>';
     $('room-list').querySelectorAll('[data-room]').forEach(button => button.onclick = () => { selectedRoom = button.dataset.room; renderRooms(); });
     const room = getRoom(); $('room-detail').innerHTML = '';
@@ -63,6 +68,18 @@ export function initClassroom({ notify, show, stopPlayback }) {
       const teacher = user.role === 'teacher';
       $('room-detail').innerHTML = `<div class="panel class-detail"><div class="room-title"><div><span class="section-kicker">${escape(room.background)} · ${room.memberCount} / ${room.capacity} 人</span><h2>${escape(room.name)}</h2></div><div class="room-code"><small>课堂码</small><strong>${escape(room.code)}</strong></div></div>${teacher ? teacherMarkup(room) : studentMarkup(room)}</div>`;
       if (teacher) {
+        teacherBinding = bindTeacherRoom({ root, room, notify,
+          begin: () => { layoutVersion++; },
+          save: async (slot, x, y) => {
+            const result = await api('/classrooms/' + room.id + '/layout', { slot, x, y });
+            layoutVersion++; rooms = rooms.map(r => r.id === room.id ? result.classroom : r); writeCache(cacheKey(), rooms);
+          },
+          settled: (slot, message) => {
+            signature = ''; renderRooms();
+            root.querySelector(`[data-slot="${slot}"]`)?.focus({ preventScroll: true });
+            if (message && $('layout-status')) $('layout-status').textContent = message;
+          },
+        });
         const joinURL = new URL(location.href); joinURL.search = '?class=' + room.code; joinURL.hash = '';
         const qr = $('room-qr'); QRCode.toDataURL(joinURL.href, { width: 140, margin: 1 }).then(url => { if (qr.isConnected) qr.src = url; }).catch(() => { if (qr.isConnected) qr.alt = '二维码生成失败，请使用课堂码'; });
         $('capacity-form').onsubmit = event => { event.preventDefault(); action($('capacity-form'), async () => { await api('/classrooms/' + room.id + '/capacity', { capacity: Number($('increase-capacity').value) }); await refresh(); }); };
@@ -73,21 +90,19 @@ export function initClassroom({ notify, show, stopPlayback }) {
     if ($('retry-queue')) $('retry-queue').onclick = () => flush();
     root.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { if (sending) { notify('正在发送，请稍后再操作。'); return; } await outbox('delete', b.dataset.cancel); await loadLocal(); renderRooms(); });
   }
-  const itemMarkup = item => `<div class="submission-item">${item.has_image ? `<img class="submission-image" src="/api/submissions/${escape(item.id)}/image" alt="${item.image_kind === 'avatar' ? '动漫形象' : '照片草稿'}">` : ''}<div><strong>${escape(item.name)}</strong><span class="status-pill ${item.status}">${({ current: '已接收', pending: '更换待接受', rejected: '更换未通过' })[item.status]}</span><p>${item.duration.toFixed(3)} 秒 · ${new Date(item.created_at).toLocaleString('zh-CN')}</p></div><audio controls preload="none" src="/api/submissions/${escape(item.id)}/audio" aria-label="试听 ${escape(item.name)}"></audio></div>`;
+  const itemMarkup = item => `<div class="submission-item">${item.has_image ? `<img class="submission-image" src="/api/submissions/${escape(item.id)}/image" alt="${item.image_kind === 'avatar' ? '动漫形象' : '照片草稿'}">` : ''}<div><strong>${escape(item.name)}</strong><span class="status-pill ${item.status}">${({ current: '已接收', pending: '更换待接受', rejected: '更换未通过' })[item.status]}</span><p>${item.image_kind === 'photo' ? '照片草稿 · ' : ''}${item.duration.toFixed(3)} 秒 · ${new Date(item.created_at).toLocaleString('zh-CN')}</p></div><audio controls preload="none" src="/api/submissions/${escape(item.id)}/audio" aria-label="试听 ${escape(item.name)}"></audio></div>`;
   function studentMarkup(room) {
     const admitted = room.members.find(m => m.student_id === user.id)?.admitted;
     return `${!admitted ? '<p class="waiting-note">课堂人数已满，等待教师扩容后即可提交。</p>' : ''}<div class="student-submissions">${room.submissions.length ? room.submissions.map(itemMarkup).join('') : '<p class="muted">还没有提交声音。请选择本地作品，将你的声音加入课堂。</p>'}</div><div class="submission-picker"><label for="class-sound">选择本地声音</label><div class="save-row"><select id="class-sound">${sounds.length ? sounds.map(s => `<option value="${escape(s.id)}">${escape(s.name)} · ${s.duration.toFixed(2)} 秒</option>`).join('') : '<option>先到声音库保存一份作品</option>'}</select><button id="send-sound" class="primary" ${!admitted || !sounds.length ? 'disabled' : ''}>${room.submissions.some(s => s.status === 'current') ? '申请更换声音' : '提交声音'}</button></div><p class="muted">作品中的照片或动漫形象会与声音一起提交。照片草稿会明确标注。</p></div>`;
   }
-  function teacherMarkup(room) {
-    return `<div class="teacher-tools"><div><p class="muted">学生输入课堂码，或使用相机扫码进入。扫码需要访问同一个服务地址。</p><form id="capacity-form"><label for="increase-capacity">课堂人数</label><input id="increase-capacity" type="number" min="${room.capacity}" max="50" value="${room.capacity}" required><button class="secondary">更新人数</button></form><p class="muted">本页负责接收与更换审批，节奏播放功能尚未接入。</p></div><img id="room-qr" alt="加入课堂二维码" width="140" height="140"></div><div class="teacher-roster">${room.members.length ? room.members.map(member => `<article class="member-card"><h3>${escape(member.name)} <span class="status-pill">${member.admitted ? '已入课' : '等待扩容'}</span></h3>${room.submissions.filter(s => s.student_id === member.student_id).map(item => itemMarkup(item) + (item.status === 'pending' ? `<div class="decision-actions"><button class="primary" data-id="${escape(item.id)}" data-decision="accept">接受更换</button><button class="secondary" data-id="${escape(item.id)}" data-decision="reject">保留原声音</button></div>` : '')).join('') || '<p class="muted">尚未提交作品</p>'}</article>`).join('') : '<p class="muted">等待学生加入…</p>'}</div>`;
-  }
+  function teacherMarkup(room) { return teacherRoomMarkup(room, itemMarkup, escape); }
   async function loadLocal() { sounds = await listSounds(); queue = (await outbox('list')).filter(q => q.userId === user?.id); }
   async function refresh(explicit = false) {
     if (refreshing) { if (explicit) setTimeout(() => refresh(true), 300); return; } refreshing = true;
-    const version = sessionVersion;
+    const version = sessionVersion, layoutAtStart = layoutVersion;
     try {
       const me = await api('/me'); if (version !== sessionVersion) return; user = me.user; online = true; writeCache('fi-user', user);
-      const result = await api('/classrooms'); if (version !== sessionVersion) return; rooms = result.classrooms; writeCache(cacheKey(), rooms);
+      const result = await api('/classrooms'); if (version !== sessionVersion) return; if (layoutAtStart === layoutVersion && !teacherBinding?.busy) { rooms = result.classrooms; writeCache(cacheKey(), rooms); }
     } catch (e) {
       if (version !== sessionVersion) return;
       if (e.status === 401) { user = null; rooms = []; localStorage.removeItem('fi-user'); online = true; }

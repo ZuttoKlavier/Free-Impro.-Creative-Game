@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createImageGenerator, validateImage } from './images.js';
+import { createLayoutStore } from './layout.js';
 
 const hashPassword = promisify(scrypt);
 const error = (status, message) => Object.assign(new Error(message), { status });
@@ -37,6 +38,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   const columns = db.prepare('PRAGMA table_info(submissions)').all().map(c => c.name);
   if (!columns.includes('image')) db.exec('ALTER TABLE submissions ADD COLUMN image BLOB');
   if (!columns.includes('image_kind')) db.exec('ALTER TABLE submissions ADD COLUMN image_kind TEXT');
+  const layout = createLayoutStore(db);
   const imageRequests = new Set(), imageLimits = new Map();
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
@@ -52,9 +54,9 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   }
   function snapshot(room, user) {
     const teacher = room.teacher_id === user.id;
-    const members = all(`SELECT m.student_id,m.admitted,u.name FROM members m JOIN users u ON u.id=m.student_id WHERE class_id=? ${teacher ? '' : 'AND student_id=?'} ORDER BY joined_at`, ...[room.id, ...(teacher ? [] : [user.id])]);
+    const members = all(`SELECT m.student_id,m.admitted,m.slot,u.name FROM members m JOIN users u ON u.id=m.student_id WHERE class_id=? ${teacher ? '' : 'AND student_id=?'} ORDER BY joined_at,m.rowid`, ...[room.id, ...(teacher ? [] : [user.id])]);
     const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind FROM submissions WHERE class_id=? AND status IN ('current','pending','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
-    return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions };
+    return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions, ...(teacher ? { layout: layout.read(room.id) } : {}) };
   }
   async function body(req) {
     let size = 0; const chunks = [];
@@ -125,24 +127,31 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         const data = await body(req);
         if (!clean(data.name, 1, 50) || !Number.isInteger(data.capacity) || data.capacity < 1 || data.capacity > 50 || !['教室', '厨房', '操场'].includes(data.background)) throw error(400, '请填写课堂名称、1–50 人及场景。');
         let code; do { code = String(randomInt(100000, 1000000)); } while (one('SELECT 1 FROM classrooms WHERE code=?', code));
-        const id = randomUUID(); run('INSERT INTO classrooms VALUES(?,?,?,?,?,?,?)', id, code, user.id, data.name.trim(), data.capacity, data.background, Date.now());
+        const id = randomUUID(); transaction(() => { run('INSERT INTO classrooms VALUES(?,?,?,?,?,?,?)', id, code, user.id, data.name.trim(), data.capacity, data.background, Date.now()); layout.ensure({ id, capacity: data.capacity }); });
         send(201, { classroom: snapshot(roomFor(user, id), user) }); return;
       }
       if (req.method === 'POST' && path === '/api/join') {
         if (user.role !== 'student') throw error(403, '请用学生账号进入课堂。');
         const data = await body(req); if (typeof data.code !== 'string' || !/^\d{6}$/.test(data.code)) throw error(400, '请输入 6 位课堂码。');
         const room = one('SELECT * FROM classrooms WHERE code=?', data.code); if (!room) throw error(404, '没有找到这个课堂，请检查课堂码。');
-        transaction(() => { const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; run('INSERT OR IGNORE INTO members VALUES(?,?,?,?)', room.id, user.id, count < room.capacity ? 1 : 0, Date.now()); });
+        transaction(() => { const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; run('INSERT OR IGNORE INTO members(class_id,student_id,admitted,joined_at) VALUES(?,?,?,?)', room.id, user.id, count < room.capacity ? 1 : 0, Date.now()); layout.assign(room.id, user.id); });
         send(200, { classroom: snapshot(room, user) }); return;
       }
-      const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit))?$/.exec(path);
+      const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit|layout))?$/.exec(path);
       if (match) {
         const room = roomFor(user, match[1]);
         if (req.method === 'GET' && !match[2]) { send(200, { classroom: snapshot(room, user) }); return; }
+        if (req.method === 'POST' && match[2] === 'layout') {
+          if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以调整位置。');
+          const data = await body(req);
+          if (!Number.isInteger(data.slot) || data.slot < 1 || data.slot > room.capacity || ![data.x, data.y].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0.05 && n <= 0.95)) throw error(400, '请选择有效的位置，并将它保持在场景内。');
+          layout.move(room.id, data.slot, data.x, data.y);
+          send(200, { classroom: snapshot(room, user) }); return;
+        }
         if (req.method === 'POST' && match[2] === 'capacity') {
           if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以扩容。');
           const data = await body(req); if (!Number.isInteger(data.capacity) || data.capacity < room.capacity || data.capacity > 50) throw error(400, '人数只能增加，最多 50 人。');
-          transaction(() => { run('UPDATE classrooms SET capacity=? WHERE id=?', data.capacity, room.id); const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; const waiting = all('SELECT student_id FROM members WHERE class_id=? AND admitted=0 ORDER BY joined_at LIMIT ?', room.id, data.capacity - count); for (const member of waiting) run('UPDATE members SET admitted=1 WHERE class_id=? AND student_id=?', room.id, member.student_id); });
+          transaction(() => { run('UPDATE classrooms SET capacity=? WHERE id=?', data.capacity, room.id); layout.ensure({ id: room.id, capacity: data.capacity }); const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; const waiting = all('SELECT student_id FROM members WHERE class_id=? AND admitted=0 ORDER BY joined_at,rowid LIMIT ?', room.id, data.capacity - count); for (const member of waiting) { run('UPDATE members SET admitted=1 WHERE class_id=? AND student_id=?', room.id, member.student_id); layout.assign(room.id, member.student_id); } });
           send(200, { classroom: snapshot(roomFor(user, room.id), user) }); return;
         }
         if (req.method === 'POST' && match[2] === 'submit') {
