@@ -1,6 +1,7 @@
 import QRCode from 'qrcode';
 import { listSounds, outbox } from './storage.js';
 import './classroom.css';
+import { toDataURL } from './images.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const readCache = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
@@ -72,10 +73,10 @@ export function initClassroom({ notify, show, stopPlayback }) {
     if ($('retry-queue')) $('retry-queue').onclick = () => flush();
     root.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { if (sending) { notify('正在发送，请稍后再操作。'); return; } await outbox('delete', b.dataset.cancel); await loadLocal(); renderRooms(); });
   }
-  const itemMarkup = item => `<div class="submission-item"><div><strong>${escape(item.name)}</strong><span class="status-pill ${item.status}">${({ current: '已接收', pending: '更换待接受', rejected: '更换未通过' })[item.status]}</span><p>${item.duration.toFixed(3)} 秒 · ${new Date(item.created_at).toLocaleString('zh-CN')}</p></div><audio controls preload="none" src="/api/submissions/${escape(item.id)}/audio" aria-label="试听 ${escape(item.name)}"></audio></div>`;
+  const itemMarkup = item => `<div class="submission-item">${item.has_image ? `<img class="submission-image" src="/api/submissions/${escape(item.id)}/image" alt="${item.image_kind === 'avatar' ? '动漫形象' : '照片草稿'}">` : ''}<div><strong>${escape(item.name)}</strong><span class="status-pill ${item.status}">${({ current: '已接收', pending: '更换待接受', rejected: '更换未通过' })[item.status]}</span><p>${item.duration.toFixed(3)} 秒 · ${new Date(item.created_at).toLocaleString('zh-CN')}</p></div><audio controls preload="none" src="/api/submissions/${escape(item.id)}/audio" aria-label="试听 ${escape(item.name)}"></audio></div>`;
   function studentMarkup(room) {
     const admitted = room.members.find(m => m.student_id === user.id)?.admitted;
-    return `${!admitted ? '<p class="waiting-note">课堂人数已满，等待教师扩容后即可提交。</p>' : ''}<div class="student-submissions">${room.submissions.length ? room.submissions.map(itemMarkup).join('') : '<p class="muted">还没有提交声音。请选择本地作品，将你的声音加入课堂。</p>'}</div><div class="submission-picker"><label for="class-sound">选择本地声音</label><div class="save-row"><select id="class-sound">${sounds.length ? sounds.map(s => `<option value="${escape(s.id)}">${escape(s.name)} · ${s.duration.toFixed(2)} 秒</option>`).join('') : '<option>先到声音库保存一份作品</option>'}</select><button id="send-sound" class="primary" ${!admitted || !sounds.length ? 'disabled' : ''}>${room.submissions.some(s => s.status === 'current') ? '申请更换声音' : '提交声音'}</button></div><p class="muted">当前提交声音素材，照片与角色会在后续加入。</p></div>`;
+    return `${!admitted ? '<p class="waiting-note">课堂人数已满，等待教师扩容后即可提交。</p>' : ''}<div class="student-submissions">${room.submissions.length ? room.submissions.map(itemMarkup).join('') : '<p class="muted">还没有提交声音。请选择本地作品，将你的声音加入课堂。</p>'}</div><div class="submission-picker"><label for="class-sound">选择本地声音</label><div class="save-row"><select id="class-sound">${sounds.length ? sounds.map(s => `<option value="${escape(s.id)}">${escape(s.name)} · ${s.duration.toFixed(2)} 秒</option>`).join('') : '<option>先到声音库保存一份作品</option>'}</select><button id="send-sound" class="primary" ${!admitted || !sounds.length ? 'disabled' : ''}>${room.submissions.some(s => s.status === 'current') ? '申请更换声音' : '提交声音'}</button></div><p class="muted">作品中的照片或动漫形象会与声音一起提交。照片草稿会明确标注。</p></div>`;
   }
   function teacherMarkup(room) {
     return `<div class="teacher-tools"><div><p class="muted">学生输入课堂码，或使用相机扫码进入。扫码需要访问同一个服务地址。</p><form id="capacity-form"><label for="increase-capacity">课堂人数</label><input id="increase-capacity" type="number" min="${room.capacity}" max="50" value="${room.capacity}" required><button class="secondary">更新人数</button></form><p class="muted">本页负责接收与更换审批，节奏播放功能尚未接入。</p></div><img id="room-qr" alt="加入课堂二维码" width="140" height="140"></div><div class="teacher-roster">${room.members.length ? room.members.map(member => `<article class="member-card"><h3>${escape(member.name)} <span class="status-pill">${member.admitted ? '已入课' : '等待扩容'}</span></h3>${room.submissions.filter(s => s.student_id === member.student_id).map(item => itemMarkup(item) + (item.status === 'pending' ? `<div class="decision-actions"><button class="primary" data-id="${escape(item.id)}" data-decision="accept">接受更换</button><button class="secondary" data-id="${escape(item.id)}" data-decision="reject">保留原声音</button></div>` : '')).join('') || '<p class="muted">尚未提交作品</p>'}</article>`).join('') : '<p class="muted">等待学生加入…</p>'}</div>`;
@@ -106,7 +107,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
   }
   $('submit-dialog').onclose = async () => {
     if ($('submit-dialog').returnValue !== 'submit' || !chosen || chosen.userId !== user?.id) return;
-    try { const { sound, room } = chosen; await outbox('put', { key: user.id + ':' + room.id, userId: user.id, classId: room.id, className: room.name, name: sound.name, blob: sound.blob, requestId: crypto.randomUUID() }); await loadLocal(); renderRooms(); await flush(); }
+    try { const { sound, room } = chosen; await outbox('put', { key: user.id + ':' + room.id, userId: user.id, classId: room.id, className: room.name, name: sound.name, blob: sound.blob, image: sound.avatar || sound.photo || null, imageKind: sound.avatar ? 'avatar' : sound.photo ? 'photo' : null, requestId: crypto.randomUUID() }); await loadLocal(); renderRooms(); await flush(); }
     catch (e) { notify('无法保存待发送作品，请检查本地存储空间。', true); }
   };
   async function flush() {
@@ -116,7 +117,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
       for (const item of items) {
         if (user?.id !== userId) break;
         try {
-          const result = await api('/classrooms/' + item.classId + '/submit', { name: item.name, requestId: item.requestId, audio: await audioBase64(item.blob) });
+          const result = await api('/classrooms/' + item.classId + '/submit', { name: item.name, requestId: item.requestId, audio: await audioBase64(item.blob), image: item.image ? await toDataURL(item.image) : null, imageKind: item.imageKind || null });
           // A new selection may have replaced this queued request during an upload.
           const current = (await outbox('list')).find(q => q.key === item.key); if (current?.requestId === item.requestId) await outbox('delete', item.key);
           if (user?.id !== userId) break;

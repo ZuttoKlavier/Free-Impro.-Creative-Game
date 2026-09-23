@@ -18,6 +18,7 @@
     "vite": "^7.1.0"
   },
   "dependencies": {
+    "pngjs": "^7.0.0",
     "qrcode": "^1.5.4"
   },
   "engines": {

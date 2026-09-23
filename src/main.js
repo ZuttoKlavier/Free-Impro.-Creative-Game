@@ -1,5 +1,7 @@
 import './style.css';
 import { initClassroom } from './classroom.js';
+import { initCharacters } from './characters.js';
+import { imageFromDataURL } from './images.js';
 import { detectSlices, mono, trimSamples, encodeWav, demoAudio, MAX_RECORDING } from './audio.js';
 import { listSounds, saveSounds, deleteSound, LIMIT } from './storage.js';
 
@@ -17,7 +19,7 @@ document.querySelector('#app').innerHTML = `
 <header><a class="brand" href="#"><span class="brand-icon">${icon('wave')}</span><span>Free Impro<small>让每个声音，自由生长</small></span></a><div class="header-right"><span class="local-dot"></span>声音保存在这台设备<button id="account-shortcut" class="student-tag">登录 / 注册</button></div></header>
 <main>
   <section class="intro"><div><div class="eyebrow">SOUND EXPLORER / 声音实验室</div><h1>把身边的声音，<br class="mobile-break">变成你的音乐。</h1><p>敲一敲、听一听。发现一个声音，收藏一份灵感。</p></div><div class="intro-art" aria-hidden="true"><span>♪</span><i></i><b>♫</b><em>✦</em></div></section>
-  <nav class="tabs" aria-label="主要功能"><button id="studio-tab" class="tab active" aria-selected="true">${icon('mic')}采集声音</button><button id="library-tab" class="tab" aria-selected="false">${icon('wave')}我的声音库 <span id="library-count">0</span></button><button id="classroom-tab" class="tab" aria-selected="false">我的课堂</button></nav>
+  <nav class="tabs" aria-label="主要功能"><button id="studio-tab" class="tab active" aria-selected="true">${icon('mic')}采集声音</button><button id="library-tab" class="tab" aria-selected="false">${icon('wave')}我的声音库 <span id="library-count">0</span></button><button id="characters-tab" class="tab" aria-selected="false">声音形象</button><button id="classroom-tab" class="tab" aria-selected="false">我的课堂</button></nav>
   <section id="studio-view">
     <div class="steps"><span class="current"><b>1</b>录一段声音</span><i></i><span id="step2"><b>2</b>挑选与裁切</span><i></i><span id="step3"><b>3</b>存入声音库</span></div>
     <div class="studio-grid">
@@ -38,7 +40,7 @@ document.querySelector('#app').innerHTML = `
     </div>
   </section>
   <section id="library-view" hidden><div class="library-top"><div><h2>收藏你的声音灵感</h2><p class="muted">每个声音都能成为下一次创作的起点。<span id="capacity">0 / 200</span></p></div><div class="library-actions"><button id="export" class="secondary">${icon('down')}备份到本地</button><button id="restore" class="secondary">${icon('up')}导入备份</button></div></div><p class="storage-note">保存在当前浏览器中。清除网站数据会删除声音，请定期下载备份。</p><div id="library" class="library-grid"></div></section>
-  <section id="classroom-view" hidden></section>
+  <section id="characters-view" hidden></section><section id="classroom-view" hidden></section>
   <footer><span>听见日常里的不一样。</span><span>FREE IMPRO · 声音采集基础版</span></footer>
 </main><div id="toast" role="status" aria-live="polite" hidden></div>
 <input id="audio-file" type="file" accept="audio/*" hidden><input id="backup-file" type="file" accept=".json,application/json" hidden>
@@ -48,6 +50,7 @@ document.querySelector('#app').innerHTML = `
 const $ = (id) => document.getElementById(id);
 let context, source, sampleRate = 0, slices = [], selected = -1, range = { start: 0, end: 1 };
 let recorder, stream, timer, meterFrame, startedAt, recording = false, busy = false, saveBusy = false;
+let libraryImageURLs = [];
 let player, library = [], toastTimer, renameId, deleteId;
 function notify(message, error = false) { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 9000 : 4000); }
 function report(error) { console.error(error); notify(error?.message || '操作没有完成，请重试。', true); }
@@ -61,9 +64,11 @@ async function playSamples(samples, rate, button) {
   player.start();
 }
 function setCaptureBusy(value) { busy = value; $('editor').inert = value; ['record', 'demo', 'import-audio'].forEach(id => $(id).disabled = value); }
-function setView(view) { if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); ['studio', 'library', 'classroom'].forEach(v => { $(v + '-view').hidden = v !== view; $(v + '-tab').classList.toggle('active', v === view); $(v + '-tab').setAttribute('aria-selected', String(v === view)); }); }
+function setView(view) { if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); ['studio', 'library', 'characters', 'classroom'].forEach(v => { $(v + '-view').hidden = v !== view; $(v + '-tab').classList.toggle('active', v === view); $(v + '-tab').setAttribute('aria-selected', String(v === view)); }); }
 $('studio-tab').onclick = () => setView('studio'); $('library-tab').onclick = () => setView('library');
 const classroom = initClassroom({ notify, show: () => setView('classroom'), stopPlayback });
+const characters = initCharacters({ notify, show: () => setView('characters'), onSaved: refreshLibrary });
+$('characters-tab').onclick = () => { setView('characters'); characters.refresh(); };
 $('classroom-tab').onclick = () => { setView('classroom'); classroom.refresh(); };
 $('account-shortcut').onclick = () => { setView('classroom'); classroom.refresh(); };
 function endTracks() { clearTimeout(timer); cancelAnimationFrame(meterFrame); stream?.getTracks().forEach(t => t.stop()); stream = null; $('meter').classList.remove('live'); }
@@ -213,12 +218,18 @@ $('save-form').onsubmit = async e => {
 };
 async function refreshLibrary() { library = await listSounds(); $('library-count').textContent = library.length; $('capacity').textContent = `${library.length} / ${LIMIT}`; renderLibrary(); window.dispatchEvent(new Event('sounds-changed')); }
 function renderLibrary() {
+  libraryImageURLs.forEach(url => URL.revokeObjectURL(url)); libraryImageURLs = [];
   $('library').replaceChildren(); $('export').disabled = !library.length;
   if (!library.length) { const empty = document.createElement('div'); empty.className = 'library-empty'; empty.innerHTML = `<div class="empty-wave">${icon('wave')}</div><h3>第一份声音灵感，等你收藏</h3><p>录一段声音，挑出最喜欢的一声保存到这里。</p><button class="primary">${icon('mic')}去采集声音</button>`; empty.querySelector('button').onclick = () => setView('studio'); $('library').append(empty); return; }
   library.forEach((sound, index) => {
     const card = document.createElement('article'); card.className = 'sound-card';
     card.innerHTML = `<div class="sound-art tone-${index % 4}"><span>${icon('wave')}</span><button class="sound-play" aria-label="试听"></button></div><div class="sound-details"><h3></h3><p>${sound.duration.toFixed(3)} 秒 <span>·</span> ${new Date(sound.createdAt).toLocaleDateString('zh-CN')}</p><div class="sound-actions"><button class="rename text-button">${icon('edit')}命名</button><button class="download text-button">${icon('down')}导出 WAV</button><button class="delete text-button" aria-label="删除声音">${icon('trash')}</button></div></div>`;
     card.querySelector('h3').textContent = sound.name;
+    if (sound.avatar || sound.photo) {
+      const img = document.createElement('img'); const url = URL.createObjectURL(sound.avatar || sound.photo); libraryImageURLs.push(url); img.src = url; img.alt = sound.avatar ? '动漫形象' : '照片草稿'; img.className = 'work-image'; card.querySelector('.sound-art > span').replaceWith(img);
+      const kind = document.createElement('div'); kind.className = 'work-kind'; kind.textContent = sound.avatar ? '声音形象' : '照片草稿 · 尚未生成动漫形象'; card.querySelector('.sound-details').append(kind);
+    }
+    const editCharacter = document.createElement('button'); editCharacter.className = 'character-edit secondary'; editCharacter.textContent = sound.photo ? '编辑形象' : '制作形象'; editCharacter.onclick = () => characters.editSound(sound); card.querySelector('.sound-details').append(editCharacter);
     const play = card.querySelector('.sound-play'); play.innerHTML = icon('play'); play.setAttribute('aria-label', `试听 ${sound.name}`);
     play.onclick = async () => { try { if (play.hasAttribute('data-playing')) { stopPlayback(); return; } const ctx = await getContext(); const buffer = await ctx.decodeAudioData(await sound.blob.arrayBuffer()); await playSamples(buffer.getChannelData(0), buffer.sampleRate, play); } catch (error) { report(error); } };
     card.querySelector('.rename').onclick = () => { renameId = sound.id; $('rename-input').value = sound.name; $('name-dialog').showModal(); };
@@ -230,20 +241,22 @@ $('name-dialog').onclose = async () => { if ($('name-dialog').returnValue !== 's
 $('delete-dialog').onclose = async () => { if ($('delete-dialog').returnValue !== 'delete') return; try { stopPlayback(); await deleteSound(deleteId); await refreshLibrary(); notify('声音已删除'); } catch (e) { report(e); } };
 function download(blob, name) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 10000); }
 function asDataURL(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); }
-$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, ...item }) => ({ ...item, audio: await asDataURL(blob) }))); download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 1, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); notify('备份已生成，请保存在设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
+$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, ...item }) => ({ ...item, audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null }))); download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 2, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); notify('备份已生成，请保存在设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
 $('restore').onclick = () => $('backup-file').click();
 $('backup-file').onchange = async e => {
   const file = e.target.files[0]; e.target.value = ''; if (!file) return; $('restore').disabled = true;
   try {
-    if (file.size > 60 * 1024 * 1024) throw new Error('备份文件过大，请选择本应用导出的备份。');
+    if (file.size > 250 * 1024 * 1024) throw new Error('备份文件过大，请选择本应用导出的备份。');
     const backup = JSON.parse(await file.text());
-    if (backup.format !== 'free-impro-sounds' || backup.version !== 1 || !Array.isArray(backup.sounds) || backup.sounds.length > LIMIT) throw new Error('不是有效的声音库备份。');
+    if (backup.format !== 'free-impro-sounds' || ![1, 2].includes(backup.version) || !Array.isArray(backup.sounds) || backup.sounds.length > LIMIT) throw new Error('不是有效的声音库备份。');
     const ctx = await getContext(), items = [], ids = new Set();
     for (const item of backup.sounds) {
       if (typeof item.id !== 'string' || !item.id || item.id.length > 100 || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 40 || !Number.isFinite(item.createdAt) || typeof item.audio !== 'string' || item.audio.length > 600000 || !/^data:audio\/wav;base64,[A-Za-z0-9+/=]+$/.test(item.audio)) throw new Error('备份包含无效作品，尚未导入任何内容。');
       ids.add(item.id); const bytes = Uint8Array.from(atob(item.audio.split(',')[1]), c => c.charCodeAt(0)); const buffer = await ctx.decodeAudioData(bytes.buffer);
       if (buffer.duration <= 0 || buffer.duration > 1.0001) throw new Error('备份中的声音超过 1 秒，未导入。');
-      if (!library.some(s => s.id === item.id)) items.push({ id: item.id, name: item.name.trim(), createdAt: item.createdAt, duration: buffer.duration, blob: encodeWav(buffer.getChannelData(0), buffer.sampleRate) });
+      const photo = backup.version === 2 && item.photo ? await imageFromDataURL(item.photo) : null;
+      const avatar = backup.version === 2 && item.avatar ? await imageFromDataURL(item.avatar) : null;
+      if (!library.some(s => s.id === item.id)) items.push({ photo, avatar, id: item.id, name: item.name.trim(), createdAt: item.createdAt, duration: buffer.duration, blob: encodeWav(buffer.getChannelData(0), buffer.sampleRate) });
     }
     await saveSounds(items); await refreshLibrary(); notify(`已导入 ${items.length} 份声音，相同 ID 的已有作品已跳过。`);
   } catch (error) { notify(error instanceof SyntaxError ? '备份文件无法解析，未导入任何内容。' : error.message || '导入失败，原有作品未改变。', true); }

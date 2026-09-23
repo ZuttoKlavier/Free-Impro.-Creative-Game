@@ -4,6 +4,7 @@ import { randomBytes, randomUUID, randomInt, scrypt, timingSafeEqual, createHash
 import { promisify } from 'node:util';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { createImageGenerator, validateImage } from './images.js';
 
 const hashPassword = promisify(scrypt);
 const error = (status, message) => Object.assign(new Error(message), { status });
@@ -21,7 +22,7 @@ export function validateWav(encoded) {
   return { audio, duration: length / (rate * 2) };
 }
 
-export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false } = {}) {
+export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, imageGenerator = createImageGenerator() } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -33,6 +34,10 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     CREATE UNIQUE INDEX IF NOT EXISTS one_current ON submissions(class_id,student_id) WHERE status='current';
     CREATE UNIQUE INDEX IF NOT EXISTS one_pending ON submissions(class_id,student_id) WHERE status='pending';
   `);
+  const columns = db.prepare('PRAGMA table_info(submissions)').all().map(c => c.name);
+  if (!columns.includes('image')) db.exec('ALTER TABLE submissions ADD COLUMN image BLOB');
+  if (!columns.includes('image_kind')) db.exec('ALTER TABLE submissions ADD COLUMN image_kind TEXT');
+  const imageRequests = new Set(), imageLimits = new Map();
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -48,12 +53,12 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   function snapshot(room, user) {
     const teacher = room.teacher_id === user.id;
     const members = all(`SELECT m.student_id,m.admitted,u.name FROM members m JOIN users u ON u.id=m.student_id WHERE class_id=? ${teacher ? '' : 'AND student_id=?'} ORDER BY joined_at`, ...[room.id, ...(teacher ? [] : [user.id])]);
-    const submissions = all(`SELECT id,student_id,name,duration,status,created_at FROM submissions WHERE class_id=? AND status IN ('current','pending','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
+    const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind FROM submissions WHERE class_id=? AND status IN ('current','pending','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
     return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions };
   }
   async function body(req) {
     let size = 0; const chunks = [];
-    for await (const chunk of req) { size += chunk.length; if (size > 600000) throw error(413, '提交内容过大。'); chunks.push(chunk); }
+    for await (const chunk of req) { size += chunk.length; if (size > 1300000) throw error(413, '提交内容过大。'); chunks.push(chunk); }
     try { const value = JSON.parse(Buffer.concat(chunks).toString()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(); return value; } catch { throw error(400, '请求内容无效。'); }
   }
   const server = createServer(async (req, res) => {
@@ -62,6 +67,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     try {
       const path = new URL(req.url, 'http://local').pathname;
       if (req.method === 'GET' && path === '/api/health') { send(200, { ok: true }); return; }
+      if (req.method === 'GET' && path === '/api/image-status') { send(200, { configured: imageGenerator.configured }); return; }
       if (!['GET', 'POST'].includes(req.method)) throw error(405, '不支持的操作。');
       if (req.method === 'POST') {
         let origin;
@@ -92,6 +98,22 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         setSession(res, user.id); send(200, { user: publicUser(user) }); return;
       }
       const { token, user } = session(req); if (!user) throw error(401, '请先登录，或重新登录以恢复连接。');
+      if (req.method === 'POST' && path === '/api/characters') {
+        if (!imageGenerator.configured) throw error(503, '图像生成尚未配置，请让教师在服务器设置 OpenAI API 密钥。照片仍可保存在本地。');
+        const now = Date.now();
+        for (const [id, history] of imageLimits) { const recent = history.filter(t => now - t < 3600000); if (recent.length) imageLimits.set(id, recent); else imageLimits.delete(id); }
+        const history = imageLimits.get(user.id) || [];
+        if (history.length >= 10) throw error(429, '本小时生成次数已用完，请稍后再来。');
+        if (imageRequests.has(user.id) || imageRequests.size >= 3) throw error(429, '正在生成其他形象，请稍后重试。');
+        const data = await body(req); validateImage(data.photo);
+        if (imageRequests.has(user.id) || imageRequests.size >= 3) throw error(429, '正在生成其他形象，请稍后重试。');
+        imageRequests.add(user.id); imageLimits.set(user.id, [...history, now]);
+        const controller = new AbortController();
+        const cancel = () => { if (!res.writableEnded) controller.abort(); }; res.on('close', cancel);
+        try { const result = await imageGenerator.generate(data.photo, AbortSignal.any([controller.signal, AbortSignal.timeout(240000)])); send(200, result); }
+        finally { imageRequests.delete(user.id); res.off('close', cancel); }
+        return;
+      }
       if (req.method === 'GET' && path === '/api/me') { send(200, { user: publicUser(user) }); return; }
       if (req.method === 'POST' && path === '/api/logout') { run('DELETE FROM sessions WHERE token=?', token); res.setHeader('Set-Cookie', `fi_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies ? '; Secure' : ''}`); send(200, { ok: true }); return; }
       if (req.method === 'GET' && path === '/api/classrooms') {
@@ -130,24 +152,27 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
           const old = one('SELECT * FROM submissions WHERE student_id=? AND request_id=?', user.id, data.requestId);
           if (old) { if (old.class_id !== room.id) throw error(409, '提交标识重复。'); send(200, { classroom: snapshot(room, user) }); return; }
           const { audio, duration } = validateWav(data.audio);
+          const image = validateImage(data.image), imageKind = image ? data.imageKind : null;
+          if (image && !['avatar', 'photo'].includes(imageKind)) throw error(400, '图片类型无效。');
           transaction(() => {
             const current = one("SELECT 1 FROM submissions WHERE class_id=? AND student_id=? AND status='current'", room.id, user.id);
-            run("UPDATE submissions SET status='superseded',audio=NULL WHERE class_id=? AND student_id=? AND status IN ('pending','rejected')", room.id, user.id);
-            run('INSERT INTO submissions VALUES(?,?,?,?,?,?,?,?,?)', randomUUID(), room.id, user.id, data.requestId, data.name.trim(), duration, audio, current ? 'pending' : 'current', Date.now());
+            run("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND status IN ('pending','rejected')", room.id, user.id);
+            run('INSERT INTO submissions(id,class_id,student_id,request_id,name,duration,audio,status,created_at,image,image_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)', randomUUID(), room.id, user.id, data.requestId, data.name.trim(), duration, audio, current ? 'pending' : 'current', Date.now(), image, imageKind);
           });
           send(201, { classroom: snapshot(room, user) }); return;
         }
       }
-      const sub = /^\/api\/submissions\/([^/]+)\/(audio|accept|reject)$/.exec(path);
+      const sub = /^\/api\/submissions\/([^/]+)\/(audio|image|accept|reject)$/.exec(path);
       if (sub) {
         const item = one('SELECT * FROM submissions WHERE id=?', sub[1]); if (!item) throw error(404, '作品不存在。');
         const room = roomFor(user, item.class_id);
         if (room.teacher_id !== user.id && item.student_id !== user.id) throw error(403, '你无法访问这份作品。');
+        if (sub[2] === 'image' && req.method === 'GET') { if (!item.image) throw error(404, '这份作品没有图片。'); res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(Buffer.from(item.image)); return; }
         if (sub[2] === 'audio' && req.method === 'GET') { if (!item.audio) throw error(404, '这份作品已被更新。'); res.writeHead(200, { 'Content-Type': 'audio/wav' }); res.end(Buffer.from(item.audio)); return; }
         if (req.method === 'POST' && ['accept', 'reject'].includes(sub[2])) {
           if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以处理更换申请。');
           if (item.status !== 'pending') throw error(409, '申请已更新，请刷新后处理最新申请。');
-          transaction(() => { if (sub[2] === 'accept') run("UPDATE submissions SET status='superseded',audio=NULL WHERE class_id=? AND student_id=? AND status='current'", room.id, item.student_id); run('UPDATE submissions SET status=? WHERE id=?', sub[2] === 'accept' ? 'current' : 'rejected', item.id); });
+          transaction(() => { if (sub[2] === 'accept') run("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND status='current'", room.id, item.student_id); run('UPDATE submissions SET status=? WHERE id=?', sub[2] === 'accept' ? 'current' : 'rejected', item.id); });
           send(200, { classroom: snapshot(room, user) }); return;
         }
       }

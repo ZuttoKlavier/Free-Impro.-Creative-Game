@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+if (existsSync('.env')) process.loadEnvFile('.env');
 import { createApp } from './app.js';
 const port = Number(process.env.API_PORT || 3001);
 const { server, db } = createApp({ dbPath: process.env.FREE_IMPRO_DB || 'data/classroom.sqlite', secureCookies: process.env.COOKIE_SECURE === 'true' });
