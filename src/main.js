@@ -1,9 +1,11 @@
 import './style.css';
+import { initOffline } from './offline.js';
 import { initClassroom } from './classroom.js';
 import { initCharacters } from './characters.js';
 import { imageFromDataURL } from './images.js';
 import { detectSlices, mono, trimSamples, encodeWav, demoAudio, MAX_RECORDING } from './audio.js';
 import { listSounds, saveSounds, deleteSound, LIMIT } from './storage.js';
+import { exportLocalFile, isStudentClient } from './student-client.js';
 
 const icons = {
   mic: '<rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0014 0v-2M12 19v3m-4 0h8"/>',
@@ -50,6 +52,7 @@ document.querySelector('#app').innerHTML = `
 const $ = (id) => document.getElementById(id);
 let context, source, sampleRate = 0, slices = [], selected = -1, range = { start: 0, end: 1 };
 let recorder, stream, timer, meterFrame, startedAt, recording = false, busy = false, saveBusy = false;
+let recordingRequest = null;
 let libraryImageURLs = [];
 let player, library = [], toastTimer, renameId, deleteId;
 function notify(message, error = false) { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 9000 : 4000); }
@@ -72,14 +75,24 @@ $('characters-tab').onclick = () => { setView('characters'); characters.refresh(
 $('classroom-tab').onclick = () => { setView('classroom'); classroom.refresh(); };
 $('account-shortcut').onclick = () => { setView('classroom'); classroom.refresh(); };
 function endTracks() { clearTimeout(timer); cancelAnimationFrame(meterFrame); stream?.getTracks().forEach(t => t.stop()); stream = null; $('meter').classList.remove('live'); }
-function stopRecording() { if (recorder?.state === 'recording') recorder.stop(); endTracks(); }
+function stopRecording() {
+  if (recordingRequest) {
+    recordingRequest = null; setCaptureBusy(false); $('record-status').textContent = '录音已取消，麦克风已关闭';
+  }
+  if (recorder?.state === 'recording') recorder.stop(); endTracks();
+}
 $('record').onclick = async () => {
   if (recording) { stopRecording(); return; }
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { notify('录音需要支持麦克风的浏览器，并通过 HTTPS 或本机 localhost 打开。也可以先导入音频。', true); return; }
   stopPlayback(); setCaptureBusy(true); $('record-status').textContent = '正在请求麦克风权限…';
+  const request = recordingRequest = {};
   try {
     const ctx = await getContext();
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+    if (recordingRequest !== request) return;
+    const grantedStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+    // Permission can resolve after the page/app has left the foreground, or after a new request.
+    if (recordingRequest !== request) { grantedStream.getTracks().forEach(track => track.stop()); return; }
+    stream = grantedStream;
     const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t));
     recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
     const chunks = [];
@@ -98,12 +111,16 @@ $('record').onclick = async () => {
     $('record').classList.add('recording'); $('record').innerHTML = `${icon('stop')}<span>结束录音</span>`; $('record-status').textContent = '正在聆听 · 15 秒后自动结束'; $('meter').classList.add('live');
     const drawMeter = () => { const elapsed = Math.min(15, (performance.now() - startedAt) / 1000); $('record-time').innerHTML = `00:${Math.floor(elapsed).toString().padStart(2, '0')}<span> / 00:15</span>`; analyser.getByteFrequencyData(data); [...$('meter').children].forEach((bar, i) => bar.style.height = (6 + data[i] / 255 * 65) + 'px'); meterFrame = requestAnimationFrame(drawMeter); };
     drawMeter(); timer = setTimeout(stopRecording, MAX_RECORDING * 1000);
+    recordingRequest = null;
   } catch (error) {
+    if (recordingRequest !== request) return;
+    recordingRequest = null;
     endTracks(); recording = false; setCaptureBusy(false); $('record-status').textContent = '点击后允许使用麦克风';
     notify(error.name === 'NotAllowedError' ? '没有麦克风权限，请在浏览器设置中允许录音后重试。' : error.name === 'NotFoundError' ? '没有找到麦克风，可以先导入音频。' : '麦克风暂时无法使用，请检查是否被其他应用占用。', true);
   }
 };
-document.addEventListener('visibilitychange', () => { if (document.hidden && recording) stopRecording(); });
+// Native permission dialogs can hide the WebView. The client reports actual backgrounding via onStop.
+document.addEventListener('visibilitychange', () => { if (document.hidden && !isStudentClient()) stopRecording(); });
 window.addEventListener('pagehide', () => { stopRecording(); stopPlayback(); });
 $('demo').onclick = () => { const demo = demoAudio(); loadAudio(demo.samples, demo.sampleRate, '示例 · 三次清脆敲击'); notify('已载入合成示例，可以切片和保存。'); };
 $('import-audio').onclick = () => $('audio-file').click();
@@ -234,14 +251,14 @@ function renderLibrary() {
     play.onclick = async () => { try { if (play.hasAttribute('data-playing')) { stopPlayback(); return; } const ctx = await getContext(); const buffer = await ctx.decodeAudioData(await sound.blob.arrayBuffer()); await playSamples(buffer.getChannelData(0), buffer.sampleRate, play); } catch (error) { report(error); } };
     card.querySelector('.rename').onclick = () => { renameId = sound.id; $('rename-input').value = sound.name; $('name-dialog').showModal(); };
     card.querySelector('.delete').onclick = () => { deleteId = sound.id; $('delete-dialog').showModal(); };
-    card.querySelector('.download').onclick = () => download(sound.blob, sound.name.replace(/[\\/:*?"<>|]/g, '_') + '.wav'); const submit = document.createElement('button'); submit.className = 'submit-sound secondary'; submit.textContent = '提交到课堂'; submit.onclick = () => classroom.chooseSound(sound); card.querySelector('.sound-details').append(submit); $('library').append(card);
+    card.querySelector('.download').onclick = () => download(sound.blob, sound.name.replace(/[\\/:*?"<>|]/g, '_') + '.wav').catch(report); const submit = document.createElement('button'); submit.className = 'submit-sound secondary'; submit.textContent = '提交到课堂'; submit.onclick = () => classroom.chooseSound(sound); card.querySelector('.sound-details').append(submit); $('library').append(card);
   });
 }
 $('name-dialog').onclose = async () => { if ($('name-dialog').returnValue !== 'save') return; const sound = library.find(s => s.id === renameId), name = $('rename-input').value.trim(); if (!sound || !name) return; try { await saveSounds([{ ...sound, name }]); await refreshLibrary(); notify('名称已更新'); } catch (e) { report(e); } };
 $('delete-dialog').onclose = async () => { if ($('delete-dialog').returnValue !== 'delete') return; try { stopPlayback(); await deleteSound(deleteId); await refreshLibrary(); notify('声音已删除'); } catch (e) { report(e); } };
-function download(blob, name) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 10000); }
+function download(blob, name) { return exportLocalFile(blob, name); }
 function asDataURL(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); }
-$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, ...item }) => ({ ...item, audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null }))); download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 2, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); notify('备份已生成，请保存在设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
+$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, ...item }) => ({ ...item, audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null }))); await download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 2, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); notify('备份已保存到设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
 $('restore').onclick = () => $('backup-file').click();
 $('backup-file').onchange = async e => {
   const file = e.target.files[0]; e.target.value = ''; if (!file) return; $('restore').disabled = true;
@@ -263,3 +280,5 @@ $('backup-file').onchange = async e => {
   finally { $('restore').disabled = false; }
 };
 refreshLibrary().catch(() => notify('无法打开本地声音库，请退出无痕模式或检查浏览器存储权限。', true));
+initOffline();
+window.addEventListener('freeimpro-background', stopRecording);

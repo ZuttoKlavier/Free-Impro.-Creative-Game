@@ -87,7 +87,7 @@ test('waveform drag selects, moves and resizes; capture clamps outside bounds; s
 
 test('touch waveform drag selects without scrolling the page', async ({ browser }) => {
   const context = await browser.newContext({ hasTouch: true, viewport: { width: 800, height: 1100 } });
-  const page = await context.newPage(); await page.goto('http://127.0.0.1:5173'); await page.locator('#demo').click();
+  const page = await context.newPage(); await page.goto(process.env.TEST_APP_ORIGIN); await page.locator('#demo').click();
   await page.locator('#waveform').scrollIntoViewIfNeeded();
   const box = await page.locator('#waveform').boundingBox(), scroll = await page.evaluate(() => scrollY);
   const client = await context.newCDPSession(page);

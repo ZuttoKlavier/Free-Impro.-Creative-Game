@@ -1,0 +1,12 @@
+{
+  "id": "/teacher.html",
+  "name": "Free Impro · 教师工作台",
+  "short_name": "教师工作台",
+  "lang": "zh-CN",
+  "start_url": "/teacher.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#faf8f4",
+  "theme_color": "#2c695b",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

@@ -1,0 +1,27 @@
+plugins { id 'com.android.application' }
+def classroomDir = rootProject.file('../data/https')
+def config = new groovy.json.JsonSlurper().parse(new File(classroomDir, 'config.json'))
+def resources = layout.buildDirectory.dir('generated/classroom-res')
+tasks.register('prepareClassroomCertificate', Copy) {
+    from new File(classroomDir, 'classroom-ca.crt')
+    into resources.map { it.dir('raw') }
+    rename { 'classroom_ca.crt' }
+}
+android {
+    namespace 'org.freeimpro.teacher'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'org.freeimpro.teacher'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+        buildConfigField 'String', 'CLASSROOM_URL', '"https://' + config.preferredHost + ':' + providers.gradleProperty('classroomPort').getOrElse('8443') + '/"'
+    }
+    buildFeatures { buildConfig true }
+    sourceSets.main.res.srcDirs resources, '../app/src/main/res'
+    buildTypes { debug { debuggable false }; release { minifyEnabled false } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+tasks.named('preBuild').configure { dependsOn 'prepareClassroomCertificate' }
+dependencies { testImplementation 'junit:junit:4.13.2' }

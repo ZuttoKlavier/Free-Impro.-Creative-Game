@@ -8,3 +8,9 @@ data/
 
 .env.*
 !.env.example
+android/.gradle/
+android/local.properties
+android/**/build/
+android/build/reports/
+*.apk
+*.aab

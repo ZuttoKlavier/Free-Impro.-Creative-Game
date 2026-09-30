@@ -6,6 +6,8 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createImageGenerator, validateImage } from './images.js';
 import { createLayoutStore } from './layout.js';
+import { createArrangementStore } from './arrangement.js';
+import { createPerformanceStore } from './performance.js';
 
 const hashPassword = promisify(scrypt);
 const error = (status, message) => Object.assign(new Error(message), { status });
@@ -23,7 +25,7 @@ export function validateWav(encoded) {
   return { audio, duration: length / (rate * 2) };
 }
 
-export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, imageGenerator = createImageGenerator() } = {}) {
+export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, imageGenerator = createImageGenerator(), performanceNow = Date.now } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -39,14 +41,17 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   if (!columns.includes('image')) db.exec('ALTER TABLE submissions ADD COLUMN image BLOB');
   if (!columns.includes('image_kind')) db.exec('ALTER TABLE submissions ADD COLUMN image_kind TEXT');
   const layout = createLayoutStore(db);
+  const arrangement = createArrangementStore(db);
+  const performance = createPerformanceStore(db, performanceNow);
   const imageRequests = new Set(), imageLimits = new Map();
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const transaction = fn => { db.exec('BEGIN IMMEDIATE'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (e) { db.exec('ROLLBACK'); throw e; } };
   const authLimits = new Map();
-  function session(req) { const token = /(?:^|;\s*)fi_session=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '')?.[1]; return token ? { token: digest(token), user: one('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND s.expires>?', digest(token), Date.now()) } : {}; }
-  function setSession(res, userId) { const token = randomBytes(32).toString('hex'); run('DELETE FROM sessions WHERE expires<?', Date.now()); run('INSERT INTO sessions VALUES(?,?,?)', digest(token), userId, Date.now() + 30 * 86400000); res.setHeader('Set-Cookie', `fi_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secureCookies ? '; Secure' : ''}`); }
+  const cookieName = role => role ? `fi_session_${role}` : 'fi_session';
+  function session(req) { const token = new RegExp('(?:^|;\\s*)' + cookieName(req.clientRole) + '=([a-f0-9]{64})(?:;|$)').exec(req.headers.cookie || '')?.[1]; return token ? { token: digest(token), user: one('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND s.expires>?', digest(token), Date.now()) } : {}; }
+  function setSession(res, userId, role) { const token = randomBytes(32).toString('hex'); run('DELETE FROM sessions WHERE expires<?', Date.now()); run('INSERT INTO sessions VALUES(?,?,?)', digest(token), userId, Date.now() + 30 * 86400000); res.setHeader('Set-Cookie', `${cookieName(role)}=${token}; HttpOnly; SameSite=Strict; Path=${role ? '/api/' + role : '/'}; Max-Age=2592000${secureCookies ? '; Secure' : ''}`); }
   function roomFor(user, id) {
     const room = one('SELECT * FROM classrooms WHERE id=?', id); if (!room) throw error(404, '课堂不存在。');
     if (room.teacher_id !== user.id && !one('SELECT 1 FROM members WHERE class_id=? AND student_id=?', id, user.id)) throw error(403, '你尚未加入这个课堂。');
@@ -55,8 +60,10 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   function snapshot(room, user) {
     const teacher = room.teacher_id === user.id;
     const members = all(`SELECT m.student_id,m.admitted,m.slot,u.name FROM members m JOIN users u ON u.id=m.student_id WHERE class_id=? ${teacher ? '' : 'AND student_id=?'} ORDER BY joined_at,m.rowid`, ...[room.id, ...(teacher ? [] : [user.id])]);
-    const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind FROM submissions WHERE class_id=? AND status IN ('current','pending','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
-    return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions, ...(teacher ? { layout: layout.read(room.id) } : {}) };
+    const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind FROM submissions WHERE class_id=? AND status IN ('current','pending','accepted','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
+    const playing = performance.read(room.id);
+    for (const item of submissions) item.enabled = item.status === 'current' && playing.playing && playing.activeStudentIds.includes(item.student_id);
+    return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions, performance: playing, ...(teacher ? { layout: layout.read(room.id), arrangement: arrangement.read(room.id) } : {}) };
   }
   async function body(req) {
     let size = 0; const chunks = [];
@@ -67,14 +74,20 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     try {
-      const path = new URL(req.url, 'http://local').pathname;
+      const incomingPath = new URL(req.url, 'http://local').pathname;
+      req.clientRole = /^\/api\/(student|teacher)\//.exec(incomingPath)?.[1];
+      const path = req.clientRole ? incomingPath.replace('/api/' + req.clientRole + '/', '/api/') : incomingPath;
+      const studentClient = (req.headers['user-agent'] || '').includes('FreeImproStudent/');
+      const teacherClient = (req.headers['user-agent'] || '').includes('FreeImproTeacher/');
+      const requiredRole = studentClient ? 'student' : teacherClient ? 'teacher' : req.clientRole;
+      if (req.clientRole && requiredRole !== req.clientRole) throw error(403, '请使用对应身份的独立客户端。');
       if (req.method === 'GET' && path === '/api/health') { send(200, { ok: true }); return; }
       if (req.method === 'GET' && path === '/api/image-status') { send(200, { configured: imageGenerator.configured }); return; }
       if (!['GET', 'POST'].includes(req.method)) throw error(405, '不支持的操作。');
       if (req.method === 'POST') {
         let origin;
         try { origin = new URL(req.headers.origin); } catch { throw error(403, '请求来源无效。'); }
-        if (!['http:', 'https:'].includes(origin.protocol) || origin.host !== req.headers.host) throw error(403, '请从本应用页面发起操作。');
+        if (!(secureCookies ? origin.protocol === 'https:' : ['http:', 'https:'].includes(origin.protocol)) || origin.host !== req.headers.host) throw error(403, '请从本应用页面发起操作。');
       }
       if (req.method === 'POST' && ['/api/register', '/api/login'].includes(path)) {
         const key = req.socket.remoteAddress, now = Date.now();
@@ -86,6 +99,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         const username = data.username.toLowerCase(); let user = one('SELECT * FROM users WHERE username=?', username);
         if (path === '/api/register') {
           if (!clean(data.name, 1, 30) || !['student', 'teacher'].includes(data.role)) throw error(400, '请填写姓名并选择身份。');
+          if (requiredRole && data.role !== requiredRole) throw error(403, requiredRole === 'teacher' ? '教师端只允许教师账号。' : '学生端只允许学生账号。');
           if (user) throw error(409, '这个账号已被使用。');
           const salt = randomBytes(16).toString('hex'), password = (await hashPassword(data.password, salt, 64)).toString('hex');
           // Recheck after asynchronous password hashing to handle concurrent registration.
@@ -95,11 +109,13 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         } else {
           const check = await hashPassword(data.password, user?.salt || 'not-an-account', 64);
           if (!user || !timingSafeEqual(check, Buffer.from(user.password, 'hex'))) throw error(401, '账号或密码不正确。');
+          if (requiredRole && user.role !== requiredRole) throw error(403, requiredRole === 'teacher' ? '请使用教师账号登录教师端。' : '请使用学生账号登录学生端。');
         }
         const old = session(req); if (old.token) run('DELETE FROM sessions WHERE token=?', old.token);
-        setSession(res, user.id); send(200, { user: publicUser(user) }); return;
+        setSession(res, user.id, req.clientRole); send(200, { user: publicUser(user) }); return;
       }
       const { token, user } = session(req); if (!user) throw error(401, '请先登录，或重新登录以恢复连接。');
+      if (requiredRole && user.role !== requiredRole) throw error(403, '账号身份与当前客户端不符，请重新登录。');
       if (req.method === 'POST' && path === '/api/characters') {
         if (!imageGenerator.configured) throw error(503, '图像生成尚未配置，请让教师在服务器设置 OpenAI API 密钥。照片仍可保存在本地。');
         const now = Date.now();
@@ -117,7 +133,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         return;
       }
       if (req.method === 'GET' && path === '/api/me') { send(200, { user: publicUser(user) }); return; }
-      if (req.method === 'POST' && path === '/api/logout') { run('DELETE FROM sessions WHERE token=?', token); res.setHeader('Set-Cookie', `fi_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookies ? '; Secure' : ''}`); send(200, { ok: true }); return; }
+      if (req.method === 'POST' && path === '/api/logout') { run('DELETE FROM sessions WHERE token=?', token); res.setHeader('Set-Cookie', `${cookieName(req.clientRole)}=; HttpOnly; SameSite=Strict; Path=${req.clientRole ? '/api/' + req.clientRole : '/'}; Max-Age=0${secureCookies ? '; Secure' : ''}`); send(200, { ok: true }); return; }
       if (req.method === 'GET' && path === '/api/classrooms') {
         const rooms = user.role === 'teacher' ? all('SELECT * FROM classrooms WHERE teacher_id=? ORDER BY created_at DESC', user.id) : all('SELECT c.* FROM classrooms c JOIN members m ON c.id=m.class_id WHERE student_id=? ORDER BY c.created_at DESC', user.id);
         send(200, { classrooms: rooms.map(r => snapshot(r, user)) }); return;
@@ -137,10 +153,22 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         transaction(() => { const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; run('INSERT OR IGNORE INTO members(class_id,student_id,admitted,joined_at) VALUES(?,?,?,?)', room.id, user.id, count < room.capacity ? 1 : 0, Date.now()); layout.assign(room.id, user.id); });
         send(200, { classroom: snapshot(room, user) }); return;
       }
-      const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit|layout))?$/.exec(path);
+      const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit|layout|arrangement|performance|activate))?$/.exec(path);
       if (match) {
         const room = roomFor(user, match[1]);
         if (req.method === 'GET' && !match[2]) { send(200, { classroom: snapshot(room, user) }); return; }
+        if (req.method === 'POST' && ['performance', 'activate'].includes(match[2])) {
+          if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以控制演奏。');
+          const data = await body(req);
+          if (match[2] === 'performance') performance.report(room.id, data);
+          else performance.activate(room.id, data);
+          send(200, { classroom: snapshot(room, user) }); return;
+        }
+        if (req.method === 'POST' && match[2] === 'arrangement') {
+          if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以编辑节奏。');
+          arrangement.edit(room.id, await body(req));
+          send(200, { classroom: snapshot(room, user) }); return;
+        }
         if (req.method === 'POST' && match[2] === 'layout') {
           if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以调整位置。');
           const data = await body(req);
@@ -151,7 +179,16 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         if (req.method === 'POST' && match[2] === 'capacity') {
           if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以扩容。');
           const data = await body(req); if (!Number.isInteger(data.capacity) || data.capacity < room.capacity || data.capacity > 50) throw error(400, '人数只能增加，最多 50 人。');
-          transaction(() => { run('UPDATE classrooms SET capacity=? WHERE id=?', data.capacity, room.id); layout.ensure({ id: room.id, capacity: data.capacity }); const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; const waiting = all('SELECT student_id FROM members WHERE class_id=? AND admitted=0 ORDER BY joined_at,rowid LIMIT ?', room.id, data.capacity - count); for (const member of waiting) { run('UPDATE members SET admitted=1 WHERE class_id=? AND student_id=?', room.id, member.student_id); layout.assign(room.id, member.student_id); } });
+          transaction(() => {
+            // Another window may have expanded the class while this body arrived.
+            const current = one('SELECT capacity FROM classrooms WHERE id=?', room.id);
+            if (data.capacity < current.capacity) throw error(409, '课堂人数已被其他窗口增加，请刷新后重试。');
+            run('UPDATE classrooms SET capacity=? WHERE id=?', data.capacity, room.id);
+            layout.ensure({ id: room.id, capacity: data.capacity });
+            const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n;
+            const waiting = all('SELECT student_id FROM members WHERE class_id=? AND admitted=0 ORDER BY joined_at,rowid LIMIT ?', room.id, Math.max(0, data.capacity - count));
+            for (const member of waiting) { run('UPDATE members SET admitted=1 WHERE class_id=? AND student_id=?', room.id, member.student_id); layout.assign(room.id, member.student_id); }
+          });
           send(200, { classroom: snapshot(roomFor(user, room.id), user) }); return;
         }
         if (req.method === 'POST' && match[2] === 'submit') {
@@ -180,8 +217,14 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         if (sub[2] === 'audio' && req.method === 'GET') { if (!item.audio) throw error(404, '这份作品已被更新。'); res.writeHead(200, { 'Content-Type': 'audio/wav' }); res.end(Buffer.from(item.audio)); return; }
         if (req.method === 'POST' && ['accept', 'reject'].includes(sub[2])) {
           if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以处理更换申请。');
-          if (item.status !== 'pending') throw error(409, '申请已更新，请刷新后处理最新申请。');
-          transaction(() => { if (sub[2] === 'accept') run("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND status='current'", room.id, item.student_id); run('UPDATE submissions SET status=? WHERE id=?', sub[2] === 'accept' ? 'current' : 'rejected', item.id); });
+          const data = await body(req);
+          if (sub[2] === 'accept') performance.checkOwner(room.id, data.clientId);
+          const next = sub[2] === 'reject' ? 'rejected' : (data.defer === true || performance.read(room.id).playing ? 'accepted' : 'current');
+          transaction(() => {
+            if (one('SELECT status FROM submissions WHERE id=?', item.id)?.status !== 'pending') throw error(409, '申请已更新，请刷新后处理最新申请。');
+            if (sub[2] === 'accept') run("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND (status='accepted' OR (status='current' AND ?='current'))", room.id, item.student_id, next);
+            run('UPDATE submissions SET status=? WHERE id=?', next, item.id);
+          });
           send(200, { classroom: snapshot(room, user) }); return;
         }
       }

@@ -1,3 +1,4 @@
 import { defineConfig } from 'vite';
-const proxy = { '/api': { target: 'http://127.0.0.1:3001', changeOrigin: false, proxyTimeout: 300000 } };
-export default defineConfig({ server: { proxy }, preview: { proxy } });
+import { offlineBuild } from './scripts/offline-build.js';
+const proxy = { '/api': { target: `http://127.0.0.1:${process.env.API_PORT || 3001}`, changeOrigin: false, proxyTimeout: 300000 } };
+export default defineConfig({ plugins: [offlineBuild()], build: { rollupOptions: { input: { student: 'index.html', teacher: 'teacher.html' } } }, server: { proxy }, preview: { proxy } });

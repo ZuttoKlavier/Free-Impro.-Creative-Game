@@ -1,9 +1,8 @@
 import { test, expect } from '@playwright/test';
 
 async function register(page, role, name) {
-  await page.goto('/'); await page.locator('#classroom-tab').click();
+  await page.goto(role === 'teacher' ? '/teacher.html' : '/'); await page.locator('#classroom-tab').click();
   await page.locator('#mode-register').click(); await page.locator('#auth-name').fill(name);
-  await page.locator('#auth-role').selectOption(role);
   await page.locator('#auth-username').fill(role + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000));
   await page.locator('#auth-password').fill('password_for_test'); await page.locator('#auth-submit').click();
   await expect(page.locator('#signed-in')).toBeVisible();
@@ -31,7 +30,7 @@ test('separate teacher and student accounts submit and approve replacement; relo
   await teacher.locator('#refresh-class').click(); await expect(teacher.locator('.member-card')).toContainText('第一声');
   await saveDemo(student, '第二声'); await student.locator('#class-sound').selectOption({ label: '第二声 · 0.15 秒' }); await submit(student);
   await expect(student.locator('.status-pill.pending')).toHaveText('更换待接受');
-  await teacher.locator('#refresh-class').click(); await teacher.getByRole('button', { name: '接受更换' }).click(); await expect(teacher.locator('.status-pill.pending')).toHaveCount(0);
+  await teacher.locator('#refresh-class').click(); await teacher.locator('.teacher-waiting').getByRole('button', { name: '接受更换' }).click(); await expect(teacher.locator('.status-pill.pending')).toHaveCount(0);
   await student.locator('#refresh-class').click(); await expect(student.locator('.submission-item strong')).toHaveText(['第二声']);
   await student.reload(); await student.locator('#classroom-tab').click(); await expect(student.locator('#identity')).toContainText('小林');
   await student.screenshot({ path: 'test-results/classroom-student.png', fullPage: true });

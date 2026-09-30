@@ -22,13 +22,13 @@ test('photo crop and sound binding persist through reload and complete backup re
 });
 
 test('generation UI uses provider response and retains previous avatar on a retry failure (mocked provider)', async ({ page }) => {
-  await page.route('**/api/image-status', r => r.fulfill({ json: { configured: true } }));
-  await page.route('**/api/characters', r => r.fulfill({ json: { image: generated, model: 'test-fixture' } }));
+  await page.route('**/api/student/image-status', r => r.fulfill({ json: { configured: true } }));
+  await page.route('**/api/student/characters', r => r.fulfill({ json: { image: generated, model: 'test-fixture' } }));
   await page.goto('/'); await page.locator('#demo').click(); await page.locator('#sound-name').fill('角色声音'); await page.locator('#save').click(); await expect(page.locator('#library-count')).toHaveText('1');
   await page.locator('#library-tab').click(); await page.getByRole('button', { name: '制作形象' }).click(); await page.locator('#photo-file').setInputFiles({ name: 'cup.png', mimeType: 'image/png', buffer: photo });
   await page.locator('#generate-character').click(); await expect(page.locator('#avatar-preview')).toBeVisible();
   const old = await page.locator('#avatar-preview').getAttribute('src');
-  await page.unroute('**/api/characters'); await page.route('**/api/characters', r => r.fulfill({ status: 502, json: { error: '生成服务暂不可用' } }));
+  await page.unroute('**/api/student/characters'); await page.route('**/api/student/characters', r => r.fulfill({ status: 502, json: { error: '生成服务暂不可用' } }));
   await page.locator('#generate-character').click(); await expect(page.locator('#character-status')).toContainText('暂不可用'); await expect(page.locator('#avatar-preview')).toHaveAttribute('src', old);
   await page.locator('#save-character').click(); await page.locator('#library-tab').click(); await expect(page.locator('.work-kind')).toHaveText('声音形象');
   await page.getByRole('button', { name: '编辑形象' }).click(); await expect(page.locator('#avatar-preview')).toBeVisible();
@@ -36,7 +36,7 @@ test('generation UI uses provider response and retains previous avatar on a retr
 });
 
 test('missing image service configuration allows local photo work and explains unavailable generation', async ({ page }) => {
-  await page.route('**/api/image-status', r => r.fulfill({ json: { configured: false } }));
+  await page.route('**/api/student/image-status', r => r.fulfill({ json: { configured: false } }));
   await page.goto('/'); await page.locator('#characters-tab').click();
   await expect(page.locator('#image-service-note')).toContainText('尚未启用'); await expect(page.locator('#generate-character')).toBeDisabled();
   await expect(page.locator('#take-photo')).toBeEnabled();

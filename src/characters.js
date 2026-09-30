@@ -1,6 +1,7 @@
 import { listSounds, saveSounds } from './storage.js';
 import { canvasBlob, normalizeGeneratedImage, toDataURL } from './images.js';
 import './characters.css';
+import { isStudentClient, capturePhoto } from './student-client.js';
 
 export function initCharacters({ show, notify, onSaved }) {
   const root = document.getElementById('characters-view');
@@ -54,6 +55,10 @@ export function initCharacters({ show, notify, onSaved }) {
   }
   $('character-sound').onchange = async e => { const sounds = await listSounds(), sound = sounds.find(s => s.id === e.target.value); if (sound) await editSound(sound); else { soundId = ''; clearPhoto(); } };
   $('take-photo').onclick = () => $('camera-file').click(); $('import-photo').onclick = () => $('photo-file').click();
+  if (isStudentClient()) {
+    $('import-photo').hidden = true;
+    $('take-photo').onclick = async () => { try { const photo = await capturePhoto(); if (photo) await setPhoto(photo); } catch (error) { notify(error.message, true); } };
+  }
   for (const id of ['camera-file', 'photo-file']) $(id).onchange = async event => {
     const file = event.target.files[0]; event.target.value = ''; if (!file) return;
     if (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { notify('请选择 10 MB 以内的 JPG、PNG 或 WebP 照片。', true); return; }
@@ -76,7 +81,7 @@ export function initCharacters({ show, notify, onSaved }) {
     if (!bitmap || !soundId || working) return; const ticket = ++generation; controller = new AbortController(); setWorking(true); $('character-status').textContent = '正在生成动漫小伙伴…通常需要一些时间，请稍候。';
     try {
       const photo = await toDataURL(await cropBlob());
-      const response = await fetch('/api/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(250000)]) });
+      const response = await fetch('/api/student/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(250000)]) });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || '生成失败，请稍后重试。');
       const image = await normalizeGeneratedImage(result.image); if (ticket !== generation) return;
       avatar = image; renderAvatar(); $('character-status').textContent = '小伙伴诞生了！满意就保存，也可以再生成一个。'; $('generate-character').textContent = '重新生成形象';
@@ -90,7 +95,7 @@ export function initCharacters({ show, notify, onSaved }) {
     catch (e) { notify(e.message || '保存失败，请检查设备空间。', true); } finally { working = false; $('character-controls').inert = false; updateButtons(); }
   };
   async function checkService() {
-    try { const response = await fetch('/api/image-status'); const result = await response.json(); configured = result.configured === true; $('image-service-note').textContent = configured ? '已连接 OpenAI 图像服务 · 登录后即可生成动漫形象' : '图像生成尚未启用。请教师配置服务器 API 密钥；你仍可拍照、裁切并保存草稿。'; }
+    try { const response = await fetch('/api/student/image-status'); const result = await response.json(); configured = result.configured === true; $('image-service-note').textContent = configured ? '已配置 OpenAI 图像服务 · 登录后可尝试生成动漫形象' : '图像生成尚未启用。请教师配置服务器 API 密钥；你仍可拍照、裁切并保存草稿。'; }
     catch { configured = false; $('image-service-note').textContent = '暂时连接不上图像服务，可以先保存照片草稿。'; } updateButtons();
   }
   window.addEventListener('sounds-changed', () => refreshSounds()); window.addEventListener('online', checkService);
