@@ -1,14 +1,15 @@
 import { test, expect } from '@playwright/test';
 
-async function register(page, role, name) {
+async function register(page, role, name, code) {
   await page.goto(role === 'teacher' ? '/teacher.html' : '/'); await page.locator('#classroom-tab').click();
+  if (role === 'student') { await page.locator('#auth-username').fill(name); await page.locator('#auth-password').fill(code); await page.locator('#auth-submit').click(); await expect(page.locator('#signed-in')).toBeVisible(); return; }
   await page.locator('#mode-register').click(); await page.locator('#auth-name').fill(name);
   await page.locator('#auth-username').fill(role + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000));
   await page.locator('#auth-password').fill('password_for_test'); await page.locator('#auth-submit').click();
   await expect(page.locator('#signed-in')).toBeVisible();
 }
 async function saveDemo(page, name) {
-  await page.locator('#studio-tab').click(); await page.locator('#demo').click();
+  await page.locator('#library-tab').click(); await page.locator('#demo').click();
   await page.locator('#sound-name').fill(name); await page.locator('#save').click();
   await expect(page.locator('#toast')).toContainText('已保存在');
   await page.locator('#classroom-tab').click();
@@ -23,7 +24,7 @@ test('separate teacher and student accounts submit and approve replacement; relo
   await teacher.locator('#class-name').fill('我们的节奏课堂'); await teacher.locator('#create-form button').click();
   await expect(teacher.locator('.room-code strong')).toBeVisible(); const code = await teacher.locator('.room-code strong').textContent();
   await expect(teacher.locator('#room-qr')).toHaveAttribute('src', /^data:image\/png/);
-  await register(student, 'student', '小林'); await student.locator('#class-code').fill(code); await student.locator('#join-form button').click();
+  await register(student, 'student', '小林', code);
   await expect(student.locator('.room-title h2')).toHaveText('我们的节奏课堂');
   await saveDemo(student, '第一声'); await submit(student);
   await expect(student.locator('.submission-item strong')).toHaveText('第一声');
@@ -42,7 +43,7 @@ test('disconnected submission stays in IndexedDB and retry delivers once', async
   const tc = await browser.newContext(), sc = await browser.newContext(); const teacher = await tc.newPage(), student = await sc.newPage();
   await register(teacher, 'teacher', '离线测试教师'); await teacher.locator('#class-name').fill('连接恢复课堂'); await teacher.locator('#create-form button').click();
   await expect(teacher.locator('.room-code strong')).toBeVisible(); const code = await teacher.locator('.room-code strong').textContent();
-  await register(student, 'student', '离线学生'); await student.locator('#class-code').fill(code); await student.locator('#join-form button').click(); await expect(student.locator('.room-title')).toBeVisible();
+  await register(student, 'student', '离线学生', code); await expect(student.locator('.room-title')).toBeVisible();
   await saveDemo(student, '断网时的声音');
   await student.route('**/api/**', route => route.abort()); await submit(student);
   await expect(student.locator('.queue-row')).toContainText('断网时的声音');

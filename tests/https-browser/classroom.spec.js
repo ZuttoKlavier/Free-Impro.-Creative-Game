@@ -21,8 +21,9 @@ test('HTTPS teacher and tablet flows use the shared classroom URL, secure login,
     browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || undefined, args: [`--ignore-certificate-errors-spki-list=${pin}`, '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
     const teacherContext = await browser.newContext(), studentContext = await browser.newContext({ viewport: { width: 800, height: 1100 }, hasTouch: true });
     const teacher = await teacherContext.newPage(), student = await studentContext.newPage();
-    async function register(page, url, role) {
+    async function register(page, url, role, code) {
       await page.goto(role === 'teacher' ? new URL('teacher.html', url).href : url); await page.locator('#classroom-tab').click();
+      if (role === 'student') { await page.locator('#auth-username').fill('HTTPS 学生'); await page.locator('#auth-password').fill(code); await page.locator('#auth-submit').click(); await expect(page.locator('#signed-in')).toBeVisible(); return; }
       await page.locator('#mode-register').click(); await page.locator('#auth-name').fill(role === 'teacher' ? 'HTTPS 老师' : 'HTTPS 学生');
       await page.locator('#auth-username').fill(role + '_https');
       await page.locator('#auth-password').fill('password123'); await page.locator('#auth-submit').click();
@@ -40,14 +41,14 @@ test('HTTPS teacher and tablet flows use the shared classroom URL, secure login,
       const src = await teacher.locator('#room-qr').getAttribute('src');
       return !!src && PNG.sync.read(Buffer.from(src.split(',')[1], 'base64')).data.equals(expectedPixels);
     }).toBe(true);
-    await register(student, app.classroomUrl + '?class=' + code, 'student');
+    await register(student, app.classroomUrl + '?class=' + code, 'student', code);
     await student.locator('#join-form button').click(); await expect(student.locator('.room-title h2')).toHaveText('平板 HTTPS 课堂');
     const session = (await studentContext.cookies()).find(cookie => cookie.name === 'fi_session_student');
     expect(session.secure).toBe(true); expect(session.httpOnly).toBe(true);
-    await student.locator('#studio-tab').click(); await student.locator('#record').click();
-    await expect(student.locator('#record')).toContainText('结束录音');
+    await student.locator('#studio-tab').focus(); await student.keyboard.down('Space');
+    await expect(student.locator('#studio-tab')).toHaveClass(/recording/);
     await expect(student.locator('#record-status')).toContainText('麦克风已关闭', { timeout: 19000 });
-    await student.locator('#demo').click(); await student.locator('#sound-name').fill('HTTPS 杯子'); await student.locator('#save').click();
+    await student.keyboard.up('Space'); await student.locator('#library-tab').click(); await student.locator('#demo').click(); await student.locator('#sound-name').fill('HTTPS 杯子'); await student.locator('#save').click();
     await expect(student.locator('#library-count')).toHaveText('1');
     await student.locator('#classroom-tab').click(); await student.locator('#send-sound').click(); await student.locator('#submit-dialog button[value="submit"]').click();
     await expect(student.locator('.submission-item strong')).toHaveText('HTTPS 杯子');
@@ -56,7 +57,7 @@ test('HTTPS teacher and tablet flows use the shared classroom URL, secure login,
     await studentContext.setOffline(true); await student.close();
     const reopened = await studentContext.newPage(); await reopened.goto(app.classroomUrl + '?class=' + code);
     await expect(reopened.locator('#connection-note')).toContainText('连接中断');
-    await reopened.locator('#library-tab').click(); await expect(reopened.locator('.sound-card h3')).toHaveText('HTTPS 杯子');
+    await reopened.locator('#library-tab').click(); await expect(reopened.locator('.sound-open')).toHaveAttribute('aria-label', '打开声音 HTTPS 杯子');
     await studentContext.setOffline(false);
     await reopened.goto(app.classroomUrl + 'connection'); await expect(reopened.locator('#checks')).toContainText('课堂服务：已连接');
     await reopened.locator('#test-mic').click(); await expect(reopened.locator('#mic-result')).toContainText('麦克风权限已允许');

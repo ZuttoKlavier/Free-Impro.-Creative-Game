@@ -1,0 +1,85 @@
+.student-app { --nav-height: 92px; padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom)); }
+.student-app header { padding-top: 18px; padding-bottom: 18px; }
+.student-app .intro { padding: 28px 0 18px; }
+.student-app .intro h1 { font-size: clamp(26px, 3vw, 36px); }
+.student-app .intro-art { display: none; }
+.student-bottom-nav { position: fixed; z-index: 20; bottom: 0; left: 50%; transform: translateX(-50%); width: min(100%, 620px); height: calc(var(--nav-height) + env(safe-area-inset-bottom)); padding: 8px 24px calc(8px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: end; background: #fffefaee; backdrop-filter: blur(18px); border: 1px solid #e7e7de; border-bottom: 0; border-radius: 28px 28px 0 0; box-shadow: 0 -8px 35px #283d3010; }
+.student-bottom-nav .nav-item { display: flex; flex-direction: column; gap: 6px; background: transparent; color: #858c83; font-size: 12px; min-height: 65px; padding: 6px; border-radius: 16px; }
+.student-bottom-nav .nav-item>svg { width: 24px; height: 24px; }
+.student-bottom-nav .nav-item.active { color: var(--green); font-weight: 700; }
+.student-bottom-nav small { font-size: 10px; background: #eeeee5; padding: 2px 5px; border-radius: 8px; }
+.student-bottom-nav .nav-record { margin-top: -34px; align-self: start; color: var(--green); }
+.nav-record-disc { width: 66px; height: 66px; display: grid; place-items: center; background: var(--orange); border: 6px solid #faf8f4; border-radius: 50%; color: white; box-shadow: 0 5px 18px #ee714b33; }
+.nav-record-disc svg { width: 26px; height: 26px; }
+.nav-record.active .nav-record-disc { background: #e66540; }
+.library-tools { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 32px 0 12px; }
+.library-tools p, .my-heading p { color: #7c8178; font-size: 14px; }
+.my-heading { padding: 32px 0 20px; }
+.student-app #toast { bottom: calc(110px + env(safe-area-inset-bottom)); }
+.student-app footer { margin-bottom: 20px; }
+@media(max-width:600px) {
+ .student-app header { padding: 14px 5%; }.student-app .brand { font-size: 19px; }.student-app .brand small { font-size: 8px; }
+ .student-app .intro h1 { font-size: 27px; margin: 10px 0; }.student-app .intro p { font-size: 12px; }
+ .student-app .steps { padding: 18px 0; gap: 8px; }.student-app .steps>i { width: 18px; }
+ .student-app .record-space { padding: 18px 0 12px; }.student-app .meter { height: 48px; }
+ .student-app .record-panel { padding: 20px; }.student-app .record-panel h2 { font-size: 19px; }
+ .student-app .library-tools { align-items: flex-start; }.student-app .library-tools h1 { font-size: 28px; }
+ .student-app .library-tools .secondary { font-size: 12px; white-space: nowrap; }
+}
+/* Student app: flat white workspace, recording is an action, not a destination. */
+.student-app { background: #fff; --paper: #fff; }
+.student-app header, .student-app .intro, .student-app footer, .student-app .steps,
+.student-app .record-panel, .student-app .library-top h2, .student-app .library-top .muted,
+.student-app .eyebrow, .student-app .my-heading>p { display: none; }
+.student-app main { max-width: 760px; padding-top: 16px; }
+.student-app .studio-grid { display: block; }
+.student-app .panel { box-shadow: none; border: 0; border-radius: 0; background: #fff; padding: 16px 0; }
+.student-app .library-tools, .student-app .my-heading { padding: 12px 0; }
+.student-app .library-tools h1, .student-app .my-heading h1 { font-size: 25px; margin: 0; }
+.student-app .library-tools p { margin: 6px 0; }
+.student-app .sound-card { box-shadow: none; border-radius: 8px; }
+.student-app .library-empty { border: 0; background: white; padding: 64px 12px; }
+.student-app .library-empty .primary { display: none; }
+.student-app .library-top { margin: 10px 0; }
+.library-imports { display: flex; gap: 20px; }
+.student-bottom-nav { background: #fff; backdrop-filter: none; box-shadow: none; border-radius: 0; border: 0; border-top: 1px solid #eee; }
+.nav-record-disc { border: 0; box-shadow: none; width: 60px; height: 60px; }
+.student-bottom-nav .nav-record { margin-top: -12px; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.nav-record.recording .nav-record-disc { background: #e34839; transform: scale(1.12); }
+#capture-overlay { position: fixed; z-index: 19; left: 50%; bottom: 120px; transform: translateX(-50%); width: min(90%,360px); background: #fff; padding: 24px; border: 1px solid #eee; border-radius: 8px; text-align: center; pointer-events: none; }
+#capture-overlay[hidden] { display: none; }
+#capture-overlay #record-time { font-size: 36px; }
+#capture-overlay #record-time span { font-size: 15px; }
+#capture-overlay #record-status { font-size: 13px; }
+.student-app .library-tools p, .student-app .storage-note { display: none; }
+.student-app { touch-action: pan-x pan-y; }
+.student-app #library { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 20px; }
+.student-app #library .library-empty { grid-column: 1 / -1; }
+.student-app #library .sound-card { display: flex; align-items: center; flex-direction: column; border: 0; background: white; overflow: visible; gap: 8px; }
+.sound-open { width: 88px; height: 88px; border-radius: 50%; background: #f2f6f4; color: #2c695b; padding: 16px; }
+.sound-open svg { width: 42px; height: 42px; }.sound-open img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.sound-open:active { transform: scale(.94); }.sound-open { transition: transform .15s; }
+.sound-detail-content { max-width: 540px; margin: 20px auto; }.sound-detail-content .sound-art { height: 180px; }
+.student-app #library .submit-sound { font-size: 13px; padding: 6px 12px; }
+/* iOS neutral palette; artwork keeps its own colors. */
+.ios-student { --green: #484848; --orange: #555; color: #333; background: #fff; }
+.ios-student .primary, .ios-student .preview-button, .ios-student .nav-record-disc,
+.ios-student .nav-record.active .nav-record-disc, .ios-student .nav-record.recording .nav-record-disc { background: #505050; color: white; box-shadow: none; }
+.ios-student .secondary, .ios-student .sound-open, .ios-student .empty-wave { background: #f3f3f3; border-color: #dedede; color: #555; }
+.ios-student .text-button, .ios-student .muted, .ios-student .library-empty, .ios-student .library-empty p { color: #757575; }
+.ios-student .student-bottom-nav .nav-item { color: #929292; }.ios-student .student-bottom-nav .nav-item.active { color: #333; }
+.ios-student .rhythm-water { fill: #555; }.ios-student .rhythm-dot { border-color: #aaa; background: #eee; }
+.recording-mic { position: relative; width: 90px; height: 90px; margin: 15px auto 28px; display: grid; place-items: center; color: #555; }
+.recording-mic svg { width: 44px; height: 44px; animation: mic-breathe 1s ease-in-out infinite; }
+.recording-mic i { position: absolute; inset: 0; border: 1px solid #aaa; border-radius: 50%; animation: mic-ring 1.6s ease-out infinite; }
+.recording-mic i:nth-child(2) { animation-delay: .8s; }
+@keyframes mic-ring { from { transform: scale(.65); opacity: .8; } to { transform: scale(1.35); opacity: 0; } }
+@keyframes mic-breathe { 50% { transform: scale(1.12); } }
+@media(prefers-reduced-motion:reduce) { .recording-mic svg, .recording-mic i { animation: none; } }
+html:has(.ios-student) { background: #fff; }
+.ios-student { min-height: 100dvh; }
+.ios-student .student-bottom-nav small { background: #eee; }
+
+/* Prevent the browser's immediate refresh; use the explicit release threshold. */
+html:has(.student-app) { overscroll-behavior-y: none; }
+.pull-refresh { position: fixed; z-index: 1000; top: calc(env(safe-area-inset-top, 0px) + 12px); left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 24px; background: #f3f3f3; color: #555; box-shadow: 0 2px 12px #0001; font-size: 14px; pointer-events: none; }

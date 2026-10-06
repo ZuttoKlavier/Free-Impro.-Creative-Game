@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Message;
 import android.text.InputType;
 import android.view.View;
+import android.view.MotionEvent;
 import android.webkit.*;
 import android.widget.*;
 import java.io.ByteArrayInputStream;
@@ -29,8 +30,9 @@ public final class MainActivity extends Activity {
     private boolean visible;
     private boolean requestingPermissions;
     private boolean mainPageFailed;
+    private float failurePullStart;
+    private boolean failurePullReady;
     private TextView status;
-    private Button reconnect;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("classroom", MODE_PRIVATE); admin = new AdminLock(prefs);
@@ -38,11 +40,22 @@ public final class MainActivity extends Activity {
         exports = new LocalExports(getContentResolver());
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL); layout.setFitsSystemWindows(true);
         LinearLayout toolbar = new LinearLayout(this); status = new TextView(this); status.setText("声音课堂 · 学生客户端"); status.setPadding(20, 12, 8, 12);
-        Button settings = new Button(this); settings.setText("教师设置"); settings.setOnClickListener(v -> verifyAdmin());
-        reconnect = new Button(this); reconnect.setText("重新连接"); reconnect.setVisibility(View.GONE);
-        reconnect.setOnClickListener(v -> web.loadUrl(policy.address()));
-        toolbar.addView(status, new LinearLayout.LayoutParams(0, -2, 1)); toolbar.addView(reconnect); toolbar.addView(settings);
-        layout.addView(toolbar); web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(layout);
+        toolbar.addView(status); layout.addView(toolbar); toolbar.setVisibility(View.GONE); web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(layout);
+        // A failed navigation has no page script to handle pull-to-refresh.
+        web.setOnTouchListener((v, event) -> {
+            if (!mainPageFailed) return false;
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                failurePullStart = event.getY(); failurePullReady = false;
+            } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                failurePullReady = event.getPointerCount() == 1 && web.getScrollY() == 0
+                    && event.getY() - failurePullStart >= 80 * getResources().getDisplayMetrics().density;
+                if (failurePullReady) status.setText("下拉刷新 · 松开刷新");
+            } else if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                if (failurePullReady) web.loadUrl(policy.address());
+                failurePullReady = false;
+            } else if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) failurePullReady = false;
+            return false;
+        });
         web.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         WebView.setWebContentsDebuggingEnabled(false);
         WebSettings s = web.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
@@ -57,12 +70,12 @@ public final class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) { boolean blocked = !policy.navigation(request.getUrl().toString()); if (blocked) notice("学生客户端只允许课堂内的功能。"); return blocked; }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                mainPageFailed = false; reconnect.setVisibility(View.GONE); cancelFileChooser(); denyPendingMedia();
+                mainPageFailed = false; toolbar.setVisibility(View.GONE); cancelFileChooser(); denyPendingMedia();
                 if (!policy.navigation(url)) { view.stopLoading(); connectionFailed("已拦截课堂外页面"); }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) { return policy.resource(request.getUrl().toString()) ? null : denied(); }
             @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) { handler.cancel(); connectionFailed("证书验证失败，请教师检查课堂地址与证书"); }
-            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) { if (request.isForMainFrame()) connectionFailed("未连接课堂；确认 Wi-Fi 后点重新连接"); }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) { if (request.isForMainFrame()) connectionFailed("未连接课堂；确认 Wi-Fi 后下拉刷新"); }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) { if (request.isForMainFrame()) connectionFailed("课堂服务暂不可用，请稍后重新连接"); }
             @Override public void onPageFinished(WebView view, String url) { if (!mainPageFailed && policy.navigation(url)) status.setText("声音课堂 · 学生客户端"); }
         });
@@ -93,7 +106,7 @@ public final class MainActivity extends Activity {
         if (admin.configured()) web.loadUrl(policy.address()); else configure(true);
     }
     private static WebResourceResponse denied() { return new WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", java.util.Collections.emptyMap(), new ByteArrayInputStream(new byte[0])); }
-    private void connectionFailed(String message) { mainPageFailed = true; status.setText(message); reconnect.setVisibility(View.VISIBLE); }
+    private void connectionFailed(String message) { mainPageFailed = true; status.setText(message); ((View) status.getParent()).setVisibility(View.VISIBLE); }
     private void notice(String value) { runOnUiThread(() -> Toast.makeText(this, value, Toast.LENGTH_LONG).show()); }
     private void finishFileChooser(ValueCallback<Uri[]> expected, Uri[] result) {
         if (chooser != expected) return;

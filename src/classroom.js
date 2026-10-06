@@ -7,6 +7,8 @@ import { teacherRoomMarkup, bindTeacherRoom } from './teacher-room.js';
 import { rhythmMarkup, bindRhythmEditor } from './teacher-rhythm.js';
 import { performanceMarkup, createTeacherPerformance } from './teacher-performance.js';
 import { isStudentClient } from './student-client.js';
+import { classroomRhythmMarkup } from './classroom-rhythm.js';
+import { classroomFetch, isOfflineStudent, canUseClassroom } from './classroom-transport.js';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const readCache = key => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } };
@@ -14,8 +16,8 @@ const writeCache = (key, value) => { try { localStorage.setItem(key, JSON.string
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 async function api(path, data) {
   let response;
-  try { response = await fetch(apiBase + path, { method: data ? 'POST' : 'GET', credentials: 'same-origin', headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined, signal: AbortSignal.timeout(12000) }); }
-  catch { throw new ApiError('暂时连接不上课堂服务，作品已保留在本地。', 0); }
+  try { response = await classroomFetch(apiBase + path, { method: data ? 'POST' : 'GET', credentials: 'same-origin', headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined, signal: AbortSignal.timeout(12000) }); }
+  catch (error) { throw new ApiError(isOfflineStudent() && !['AbortError', 'TimeoutError'].includes(error?.name) && error?.message ? error.message : '暂时连接不上课堂服务，作品已保留在本地。', 0); }
   if (response.status >= 500) throw new ApiError('课堂服务暂不可用，请稍后重试。', 0);
   let result; try { result = await response.json(); } catch { throw new ApiError('课堂服务响应异常，请重新启动课堂服务后重试。', 0); } if (!response.ok) throw new ApiError(result.error, response.status); return result;
 }
@@ -27,6 +29,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
   let teacherBinding = null, rhythmBinding = null, performance = null, layoutVersion = 0;
   let joinBase = new URL('/', location.href).href;
   const rhythmViews = new Map();
+  const mediaURLs = new Set();
   const rhythmView = id => { if (!rhythmViews.has(id)) rhythmViews.set(id, {}); return rhythmViews.get(id); };
   const editing = () => teacherBinding?.busy || rhythmBinding?.busy || performance?.busy;
   const savingEdits = () => teacherBinding?.busy || rhythmBinding?.busy || performance?.editingPosition;
@@ -52,17 +55,26 @@ export function initClassroom({ notify, show, stopPlayback }) {
   if (clientRole === 'teacher') { $('join-form').remove(); $('submit-dialog').remove(); $('outbox-panel').remove(); } else { $('create-form').remove(); }
   $('auth-panel').querySelector('.muted').textContent = clientRole === 'teacher' ? '教师专用登录。现有教师账号可继续使用，学生账号请使用学生端。' : '学生专用登录。现有学生账号可继续使用。';
   if ($('class-code')) $('class-code').value = /^\d{6}$/.test(pendingCode) ? pendingCode : '';
-  function setAuthMode(mode) { authMode = mode; $('register-fields').hidden = mode !== 'register'; $('auth-name').required = mode === 'register'; $('auth-password').autocomplete = mode === 'register' ? 'new-password' : 'current-password'; $('auth-submit').textContent = mode === 'register' ? '注册并登录' : '登录'; $('mode-login').classList.toggle('active', mode === 'login'); $('mode-register').classList.toggle('active', mode === 'register'); $('auth-error').textContent = ''; }
+  function setAuthMode(mode) { authMode = mode; $('register-fields').hidden = mode !== 'register'; $('auth-name').required = mode === 'register'; $('auth-password').autocomplete = mode === 'register' ? 'new-password' : 'current-password'; $('auth-submit').textContent = mode === 'register' ? '注册并登录' : '登录'; $('mode-login').classList.toggle('active', mode === 'login'); $('mode-register').classList.toggle('active', mode === 'register'); $('auth-error').textContent = '';
+  }
   $('mode-login').onclick = () => setAuthMode('login'); $('mode-register').onclick = () => setAuthMode('register');
+  if (clientRole === 'student') {
+    $('auth-panel').querySelector('.auth-tabs').hidden = true;
+    $('auth-username').parentElement.firstChild.textContent = '姓名';
+    $('auth-username').removeAttribute('pattern'); $('auth-username').minLength = 1; $('auth-username').maxLength = 30; $('auth-username').placeholder = '请输入姓名';
+    const code = $('auth-password'); code.parentElement.firstChild.textContent = '课堂码'; code.type = 'text'; code.inputMode = 'numeric'; code.pattern = '[0-9]{6}'; code.minLength = 6; code.maxLength = 6; code.autocomplete = 'off'; code.placeholder = '老师提供的 6 位课堂码'; code.value = /^\d{6}$/.test(pendingCode) ? pendingCode : '';
+    $('auth-submit').textContent = '连接课堂';
+    $('auth-panel').querySelector('.muted').textContent = '填写姓名和老师提供的课堂码，即可连接课堂，无需密码。';
+  }
   function renderIdentity() {
     root.querySelector('.class-heading h2').textContent = clientRole === 'teacher' ? '布置一堂声音课堂' : '把你的声音，带进课堂';
-    root.querySelector('.class-heading .muted').textContent = clientRole === 'teacher' ? '设置人数与场景，接收每位学生的声音伙伴。' : '登录后进入老师的课堂，选择一份声音分享。';
+    root.querySelector('.class-heading .muted').textContent = clientRole === 'teacher' ? '设置人数与场景，接收每位学生的声音伙伴。' : '填写姓名和课堂码，连接老师的课堂。';
     $('auth-panel').hidden = !!user; $('signed-in').hidden = !user;
-    document.getElementById('account-shortcut').textContent = user ? user.name : '登录 / 注册';
-    $('identity').innerHTML = user ? `<span class="identity-name">${escape(user.name)} · ${user.role === 'teacher' ? '教师' : '学生'}</span><button id="logout" class="text-button">退出账号</button>` : '';
+    const shortcut = document.getElementById('account-shortcut'); if (shortcut) shortcut.textContent = user ? user.name : '登录 / 注册';
+    $('identity').innerHTML = user ? `<span class="identity-name">${escape(user.name)} · ${user.role === 'teacher' ? '教师' : '学生'}</span><button id="logout" class="text-button">${clientRole === 'student' ? '退出连接' : '退出账号'}</button>` : '';
     if ($('logout')) $('logout').onclick = async () => {
       if (!canLeave()) return;
-      try { performance?.stop(); await api('/logout', {}); sessionVersion++; user = null; rooms = []; queue = []; localStorage.removeItem('fi-' + clientRole + '-user'); signature = ''; renderIdentity(); renderRooms(); stopPlayback(); }
+      try { performance?.stop(); if (isOfflineStudent()) await window.FreeImproClassroom.disconnect(); else await api('/logout', {}); sessionVersion++; user = null; rooms = []; queue = []; localStorage.removeItem('fi-' + clientRole + '-user'); signature = ''; renderIdentity(); renderRooms(); stopPlayback(); }
       catch (e) { notify('暂时无法完成安全退出，请恢复课堂连接后重试。', true); }
     };
     if ($('join-form')) $('join-form').hidden = user?.role !== 'student'; if ($('create-form')) $('create-form').hidden = user?.role !== 'teacher';
@@ -70,7 +82,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
   }
   $('auth-form').onsubmit = async event => {
     event.preventDefault(); $('auth-submit').disabled = true; $('auth-error').textContent = '';
-    try { const result = await api('/' + authMode, { username: $('auth-username').value.trim(), password: $('auth-password').value, name: $('auth-name').value.trim(), role: $('auth-role').value }); user = result.user; online = true; sessionVersion++; writeCache('fi-' + clientRole + '-user', user); rooms = readCache(cacheKey()) || []; selectedRoom = ''; $('auth-password').value = ''; signature = ''; renderIdentity(); await refresh(); }
+    try { const result = await api(clientRole === 'student' ? '/enter-classroom' : '/' + authMode, clientRole === 'student' ? { name: $('auth-username').value.trim(), code: $('auth-password').value.trim() } : { username: $('auth-username').value.trim(), password: $('auth-password').value, name: $('auth-name').value.trim(), role: $('auth-role').value }); user = result.user; online = true; sessionVersion++; writeCache('fi-' + clientRole + '-user', user); rooms = readCache(cacheKey()) || []; selectedRoom = ''; $('auth-password').value = ''; signature = ''; renderIdentity(); await refresh(); }
     catch (e) { $('auth-error').textContent = e.message; } finally { $('auth-submit').disabled = false; }
   };
   async function action(form, task) { const button = form.querySelector('button'); button.disabled = true; try { await task(); } catch (e) { notify(e.message, true); } finally { button.disabled = false; } }
@@ -86,17 +98,18 @@ export function initClassroom({ notify, show, stopPlayback }) {
   $('refresh-class').onclick = () => refresh(true);
   function renderRooms() {
     if (editing()) return;
-    const state = JSON.stringify({ user: user?.id, rooms, selectedRoom, sending, sounds: sounds.map(s => ({ id: s.id, name: s.name })), queue: queue.map(q => ({ key: q.key, name: q.name, error: q.error })) });
+    const state = JSON.stringify({ user: user?.id, rooms, selectedRoom, sending, sounds: sounds.map(s => ({ id: s.id, name: s.name, rhythm: s.rhythm })), queue: queue.map(q => ({ key: q.key, name: q.name, error: q.error })) });
     if (signature === state) return;
     const focus = rhythmBinding?.captureFocus(); rhythmBinding?.destroy(); rhythmBinding = null;
     signature = state; teacherBinding = null;
+    mediaURLs.forEach(url => URL.revokeObjectURL(url)); mediaURLs.clear();
     $('room-list').innerHTML = rooms.length ? rooms.map(r => `<button class="room-chip ${getRoom()?.id === r.id ? 'active' : ''}" data-room="${escape(r.id)}">${escape(r.name)}<small>${r.memberCount} / ${r.capacity} 人</small></button>`).join('') : '<p class="muted">还没有课堂。创建或输入课堂码后，就会出现在这里。</p>';
     $('room-list').querySelectorAll('[data-room]').forEach(button => button.onclick = () => { if (!canLeave()) return; selectedRoom = button.dataset.room; renderRooms(); });
     const room = getRoom(); $('room-detail').innerHTML = '';
     if (performance && (!room || user?.role !== 'teacher' || performance.roomId !== room.id)) { performance.dispose(); performance = null; }
     if (room && user) {
       const teacher = user.role === 'teacher';
-      $('room-detail').innerHTML = `<div class="panel class-detail"><div class="room-title"><div><span class="section-kicker">${escape(room.background)} · ${room.memberCount} / ${room.capacity} 人</span><h2>${escape(room.name)}</h2></div><div class="room-code"><small>课堂码</small><strong>${escape(room.code)}</strong></div></div>${teacher ? teacherMarkup(room) : studentMarkup(room)}</div>`;
+      $('room-detail').innerHTML = `<div class="panel class-detail"><div class="room-title"><div><span class="section-kicker">${escape(room.background)} · ${room.memberCount} / ${room.capacity} 人</span><h2>${escape(room.name)}</h2></div><div class="room-code"><small>课堂码</small><strong>${escape(room.code)}</strong></div></div>${teacher ? teacherMarkup(room) : studentMarkup(room) + classroomRhythmMarkup(room, sounds, false, escape)}</div>`;
       if (teacher) {
         if (!performance) performance = createTeacherPerformance({ root, room, api, escape, notify,
           canPlay: () => { if (!rhythmBinding?.busy) return true; notify('节奏尚未保存，请先等待保存完成或重试。', true); return false; },
@@ -131,20 +144,46 @@ export function initClassroom({ notify, show, stopPlayback }) {
         const qr = $('room-qr'); QRCode.toDataURL(joinURL.href, { width: 140, margin: 1 }).then(url => { if (qr.isConnected) qr.src = url; }).catch(() => { if (qr.isConnected) qr.alt = '二维码生成失败，请使用课堂码'; });
         $('capacity-form').onsubmit = event => { event.preventDefault(); action($('capacity-form'), async () => { await api('/classrooms/' + room.id + '/capacity', { capacity: Number($('increase-capacity').value) }); await refresh(); }); };
         root.querySelectorAll('[data-decision]').forEach(button => button.onclick = async () => { button.disabled = true; try { const result = await api('/submissions/' + button.dataset.id + '/' + button.dataset.decision, { clientId: performance?.clientId, defer: !!performance?.playing }); updateRoom(result); renderRooms(); notify(button.dataset.decision === 'accept' ? (performance?.playing ? '已接受更换，声音载入后在下一遍起点启用。' : '已接受更换，课堂作品已更新。') : '已拒绝更换，原声音保留。'); } catch (e) { notify(e.message, true); await refresh(); } });
-      } else if ($('send-sound')) $('send-sound').onclick = () => chooseSound(sounds.find(s => s.id === $('class-sound').value));
+        root.querySelectorAll('[data-rhythm-accept], [data-rhythm-reject]').forEach(button => button.onclick = async () => {
+          if (savingEdits()) { notify('请先等待当前修改保存。'); return; }
+          button.disabled = true;
+          const requestId = button.dataset.rhythmAccept || button.dataset.rhythmReject;
+          const request = room.rhythmRequests.find(r => r.requestId === requestId);
+          try { const result = await api('/classrooms/' + room.id + '/rhythm-decision', { studentId: request.studentId, requestId, decision: button.dataset.rhythmAccept ? 'accept' : 'reject', revision: room.arrangement.revision }); updateRoom(result); renderRooms(); notify(button.dataset.rhythmAccept ? '节奏已接受；播放中从下一遍完整 loop 启用。' : '已保留原节奏。'); }
+          catch (e) { notify(e.message, true); await refresh(); } finally { button.disabled = false; }
+        });
+      } else {
+        if ($('send-sound')) $('send-sound').onclick = () => chooseSound(sounds.find(s => s.id === $('class-sound').value));
+        if ($('send-rhythm')) $('send-rhythm').onclick = async () => {
+          const sound = sounds.find(s => s.id === $('rhythm-sound').value), current = room.submissions.find(s => s.status === 'current');
+          if (!sound?.rhythm || !current) return;
+          try { await outbox('put', { key: user.id + ':' + room.id + ':rhythm', kind: 'rhythm', userId: user.id, classId: room.id, className: room.name, name: sound.name + ' · 节奏', rhythm: sound.rhythm, submissionId: current.id, requestId: crypto.randomUUID() }); await loadLocal(); renderRooms(); await flush(); } catch (e) { notify(e.message, true); }
+        };
+      }
+      $('room-detail').querySelectorAll('.classroom-rhythm [aria-label="提交的节奏"]').forEach(el => { el.style.overflowWrap = 'anywhere'; });
     }
     if ($('outbox-panel')) $('outbox-panel').innerHTML = queue.length ? `<div class="panel queue-panel"><h3>待发送作品</h3>${queue.map(q => `<div class="queue-row"><div><strong>${escape(q.name)}</strong><p>${escape(q.className)} · ${escape(sending ? '正在发送…' : q.error || '等待发送')}</p></div><button class="text-button" data-cancel="${escape(q.key)}">取消发送</button></div>`).join('')}<button id="retry-queue" class="secondary">重试发送</button></div>` : '';
     if ($('retry-queue')) $('retry-queue').onclick = () => flush();
     root.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => { if (sending) { notify('正在发送，请稍后再操作。'); return; } await outbox('delete', b.dataset.cancel); await loadLocal(); renderRooms(); });
+    if (canUseClassroom()) root.querySelectorAll('[data-classroom-media]').forEach(async element => {
+      try {
+        const response = await classroomFetch(element.dataset.classroomMedia, { signal: AbortSignal.timeout(12000) });
+        if (!response.ok) return;
+        const blob = await response.blob(); if (!element.isConnected || !canUseClassroom()) return;
+        const url = URL.createObjectURL(blob); mediaURLs.add(url); element.src = url;
+      } catch { /* A media retry must not interrupt local creation or classroom polling. */ }
+    });
   }
-  const itemMarkup = item => `<div class="submission-item">${item.has_image ? `<img class="submission-image" src="${apiBase}/submissions/${escape(item.id)}/image" alt="${item.image_kind === 'avatar' ? '动漫形象' : '照片草稿'}">` : ''}<div><strong>${escape(item.name)}</strong><span class="status-pill ${item.status}">${item.enabled ? '已启用 · 正在演奏' : ({ current: '已接收', pending: '更换待接受', accepted: '已接受 · 等待循环切换', rejected: '更换未通过' })[item.status]}</span><p>${item.image_kind === 'photo' ? '照片草稿 · ' : ''}${item.duration.toFixed(3)} 秒 · ${new Date(item.created_at).toLocaleString('zh-CN')}</p></div><audio controls preload="none" src="/api/submissions/${escape(item.id)}/audio" aria-label="试听 ${escape(item.name)}"></audio></div>`;
+  const mediaAttribute = path => `${isOfflineStudent() ? 'data-classroom-media' : 'src'}="${path}"`;
+  const itemMarkup = item => `<div class="submission-item">${item.has_image ? `<img class="submission-image" ${mediaAttribute(`${apiBase}/submissions/${escape(item.id)}/image`)} alt="${item.image_kind === 'avatar' ? '动漫形象' : '照片草稿'}">` : ''}<div><strong>${escape(item.name)}</strong><span class="status-pill ${item.status}">${item.enabled ? '已启用 · 正在演奏' : ({ current: '已接收', pending: '更换待接受', accepted: '已接受 · 等待循环切换', rejected: '更换未通过' })[item.status]}</span><p>${item.image_kind === 'photo' ? '照片草稿 · ' : ''}${item.duration.toFixed(3)} 秒 · ${new Date(item.created_at).toLocaleString('zh-CN')}</p></div><audio controls preload="none" ${mediaAttribute(`${apiBase}/submissions/${escape(item.id)}/audio`)} aria-label="试听 ${escape(item.name)}"></audio></div>`;
   function studentMarkup(room) {
     const admitted = room.members.find(m => m.student_id === user.id)?.admitted;
     return `${!admitted ? '<p class="waiting-note">课堂人数已满，等待教师扩容后即可提交。</p>' : ''}<div class="student-submissions">${room.submissions.length ? room.submissions.map(itemMarkup).join('') : '<p class="muted">还没有提交声音。请选择本地作品，将你的声音加入课堂。</p>'}</div><div class="submission-picker"><label for="class-sound">选择本地声音</label><div class="save-row"><select id="class-sound">${sounds.length ? sounds.map(s => `<option value="${escape(s.id)}">${escape(s.name)} · ${s.duration.toFixed(2)} 秒</option>`).join('') : '<option>先到声音库保存一份作品</option>'}</select><button id="send-sound" class="primary" ${!admitted || !sounds.length ? 'disabled' : ''}>${room.submissions.some(s => s.status === 'current') ? '申请更换声音' : '提交声音'}</button></div><p class="muted">作品中的照片或动漫形象会与声音一起提交。照片草稿会明确标注。</p></div>`;
   }
-  function teacherMarkup(room) { return teacherRoomMarkup(room, itemMarkup, escape) + performanceMarkup(room, escape) + rhythmMarkup(room, escape, rhythmView(room.id)); }
+  function teacherMarkup(room) { return teacherRoomMarkup(room, itemMarkup, escape) + classroomRhythmMarkup(room, [], true, escape) + performanceMarkup(room, escape) + rhythmMarkup(room, escape, rhythmView(room.id)); }
   async function loadLocal() { if (clientRole === 'teacher') { sounds = []; queue = []; return; } sounds = await listSounds(); queue = (await outbox('list')).filter(q => q.userId === user?.id); }
   async function refresh(explicit = false) {
+    if (!canUseClassroom()) { await loadLocal(); renderIdentity(); renderRooms(); return; }
     if (refreshing) { if (explicit) setTimeout(() => refresh(true), 300); return; } refreshing = true;
     const version = sessionVersion, layoutAtStart = layoutVersion;
     try {
@@ -173,17 +212,19 @@ export function initClassroom({ notify, show, stopPlayback }) {
     catch (e) { notify('无法保存待发送作品，请检查本地存储空间。', true); }
   };
   async function flush() {
-    if (sending || !user) return; sending = true; renderRooms(); const userId = user.id;
+    if (sending || !user || !canUseClassroom()) return; sending = true; renderRooms(); const userId = user.id;
     try {
       const items = (await outbox('list')).filter(q => q.userId === userId);
       for (const item of items) {
         if (user?.id !== userId) break;
         try {
-          const result = await api('/classrooms/' + item.classId + '/submit', { name: item.name, requestId: item.requestId, audio: await audioBase64(item.blob), image: item.image ? await toDataURL(item.image) : null, imageKind: item.imageKind || null });
+          const result = item.kind === 'rhythm'
+            ? await api('/classrooms/' + item.classId + '/rhythm-request', { requestId: item.requestId, submissionId: item.submissionId, rhythm: item.rhythm })
+            : await api('/classrooms/' + item.classId + '/submit', { name: item.name, requestId: item.requestId, audio: await audioBase64(item.blob), image: item.image ? await toDataURL(item.image) : null, imageKind: item.imageKind || null });
           // A new selection may have replaced this queued request during an upload.
           const current = (await outbox('list')).find(q => q.key === item.key); if (current?.requestId === item.requestId) await outbox('delete', item.key);
           if (user?.id !== userId) break;
-          online = true; rooms = rooms.map(r => r.id === result.classroom.id ? result.classroom : r); writeCache(cacheKey(), rooms); notify(result.classroom.submissions.some(s => s.status === 'pending') ? '更换申请已发送，等待教师接受。' : '声音已被课堂接收。');
+          online = true; rooms = rooms.map(r => r.id === result.classroom.id ? result.classroom : r); writeCache(cacheKey(), rooms); notify(item.kind === 'rhythm' ? '节奏已发送，等待教师接受。' : result.classroom.submissions.some(s => s.status === 'pending') ? '更换申请已发送，等待教师接受。' : '声音已被课堂接收。');
         } catch (e) {
           const current = (await outbox('list')).find(q => q.key === item.key); if (current?.requestId === item.requestId) await outbox('put', { ...item, error: e.message });
           if (!e.status) online = false;
@@ -194,6 +235,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
     } finally { sending = false; await loadLocal(); renderIdentity(); renderRooms(); }
   }
   window.addEventListener('online', () => refresh());
+  window.addEventListener('freeimpro-classroom-disconnected', () => { sessionVersion++; user = null; rooms = []; queue = []; online = true; signature = ''; renderIdentity(); renderRooms(); });
   window.addEventListener('sounds-changed', () => loadLocal().then(renderRooms));
   setInterval(() => { if (!document.hidden && !root.hidden && user) refresh(); }, 8000);
   renderIdentity(); refresh();

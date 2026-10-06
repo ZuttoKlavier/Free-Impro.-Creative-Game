@@ -9,10 +9,10 @@ test('student app profile captures photos internally and exports backups through
     navigator.mediaDevices.getUserMedia = async constraints => { const stream = await getMedia(constraints); window.cameraTracks = stream.getTracks(); return stream; };
   });
   try {
-    const page = await context.newPage(); await page.goto('/'); await page.locator('#classroom-tab').click(); await page.locator('#mode-register').click();
+    const page = await context.newPage(); await page.goto('/'); await page.locator('#classroom-tab').click(); await expect(page.locator('.auth-tabs')).toBeHidden();
     await expect(page.locator('#auth-role')).toBeHidden(); await expect(page.locator('#classroom-connection')).toBeHidden();
-    await page.locator('#studio-tab').click(); await page.locator('#demo').click(); await page.locator('#sound-name').fill('应用内照片声音'); await page.locator('#save').click();
-    await page.locator('#library-tab').click(); await page.locator('.character-edit').click();
+    await page.locator('#library-tab').click(); await page.locator('#demo').click(); await page.locator('#sound-name').fill('应用内照片声音'); await page.locator('#save').click();
+    await page.locator('#library-tab').click(); await page.locator('.sound-open').click(); await page.locator('.character-edit').click();
     await expect(page.locator('#import-photo')).toBeHidden();
     await page.locator('#take-photo').click(); await expect(page.locator('[data-shoot]')).toBeEnabled();
     await page.locator('[data-shoot]').click(); await expect(page.locator('#crop-editor')).toBeVisible();
@@ -33,6 +33,6 @@ test('student app profile captures photos internally and exports backups through
     await page.locator('#export').click();
     await expect(page.locator('#toast')).toContainText('文件保存失败');
     expect(await page.evaluate(() => window.cancelledExport)).toBe('test-export');
-    await expect(page.locator('.character-edit')).toHaveCount(1);
+    await expect(page.locator('.sound-card')).toHaveCount(1);
   } finally { await context.close(); }
 });

@@ -1,8 +1,9 @@
 export async function initOffline() {
+  if (window.FreeImproClassroom?.offline) return; // The iOS shell is already in the install bundle.
   if (navigator.userAgent.includes('FreeImproTeacher/')) return;
   if (!import.meta.env.PROD || !('serviceWorker' in navigator) || !window.isSecureContext) return;
   const status = document.createElement('span'); status.id = 'offline-ready'; status.setAttribute('role', 'status');
-  status.textContent = '正在准备离线使用…'; document.querySelector('footer')?.append(status);
+  status.textContent = '正在准备离线使用…'; (document.querySelector('.my-heading') || document.querySelector('footer'))?.append(status);
   try {
     const registration = await navigator.serviceWorker.register(navigator.userAgent.includes('FreeImproStudent/') ? '/student-sw.js' : '/sw.js');
     let timeout;

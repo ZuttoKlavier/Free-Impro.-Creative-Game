@@ -9,11 +9,21 @@ class FakeContext {
   }
   createBufferSource() {
     const context = this;
-    const source = { connect() {}, disconnect() {}, start(time) { this.time = time; }, stop() { this.stoppedAt = context.currentTime; } };
+    const source = { playbackRate: { value: 1 }, connect() {}, disconnect() {}, start(time) { this.time = time; }, stop() { this.stoppedAt = context.currentTime; } };
     this.sources.push(source);
     return source;
   }
 }
+
+test('a held sample triggers once and spans four step durations', async () => {
+  const { engine, context, add, advance, notes } = setup();
+  const pattern = Array(16).fill(false); pattern[0] = 4;
+  add('held', { buffer: { duration: .2 }, pattern }); engine.setBpm(120); engine.setActive('held', true); await engine.play();
+  advance(.6);
+  assert.equal(notes().length, 1);
+  assert.equal(context.sources[0].playbackRate.value, 1);
+  engine.dispose();
+});
 
 function setup(callbacks = {}) {
   const context = new FakeContext();
@@ -256,5 +266,76 @@ test('an action after a stalled scheduler uses the current loop, without burstin
   assert.equal(notes().some(s => s.buffer.name === 'b-v1' && s.time < 3.025), false);
   advance(3.025);
   assert.equal(engine.getState().tracks[1].active, true);
+  engine.dispose();
+});
+
+test('audible countdown covers all bars, follows tempo and swing, and resets only at the real boundary', async () => {
+  for (const bars of [1, 8, 16]) for (const swing of [0, .3, .5]) {
+    const { engine, add, advance } = setup();
+    engine.setBpm(120); engine.setSwing(swing); engine.setBars(bars);
+    add('a'); engine.setActive('a', true); await engine.play();
+    assert.ok(Math.abs(engine.getState().remaining - (bars * 2 + .025)) < 1e-9);
+    const elapsed = .125 * (1 + swing) * .6;
+    advance(.025 + elapsed);
+    let state = engine.getState();
+    assert.ok(Math.abs(state.remaining - (bars * 2 - elapsed)) < 1e-9);
+    assert.ok(Math.abs(state.barProgress - .6 / 16) < 1e-9);
+    const progress = state.progress;
+    engine.setBpm(240);
+    state = engine.getState();
+    assert.ok(Math.abs(state.progress - progress) < 1e-9);
+    assert.ok(Math.abs(state.remaining - (bars * 2 - elapsed) / 2) < 1e-9);
+    if (bars > 1) { engine.setBars(1); assert.equal(engine.getState().bars, bars); }
+    const boundary = .025 + elapsed + state.remaining;
+    advance(boundary - .02); // The look-ahead cursor is already in the next loop.
+    assert.equal(engine.getState().loop, 0);
+    assert.ok(Math.abs(engine.getState().remaining - .02) < 1e-9);
+    advance(boundary);
+    assert.equal(engine.getState().loop, 1);
+    assert.ok(Math.abs(engine.getState().remaining - bars) < 1e-9);
+    assert.ok(Math.abs(engine.getState().barProgress) < 1e-9);
+    engine.stop();
+    assert.equal(engine.getState().remaining, 0);
+    assert.equal(engine.getState().barProgress, 0);
+    engine.dispose();
+  }
+});
+
+test('a 49-layer addition commits once at a common boundary and group exit silences every scheduled source', async () => {
+  let changes = 0;
+  const { engine, context, add, advance, notes } = setup({ onChange: () => changes++ });
+  engine.setBpm(240);
+  for (let i = 0; i < 50; i++) add(i);
+  engine.setActive(0, true); await engine.play(); advance(.1);
+  const ids = Array.from({ length: 49 }, (_, i) => i + 1);
+  changes = 0;
+  engine.setActiveMany([...ids, 1, 2], true);
+  assert.equal(changes, 1);
+  assert.equal(engine.getState().tracks.filter(t => t.waiting).length, 49);
+  advance(1.024);
+  assert.equal(engine.getState().tracks.filter(t => t.active).length, 1);
+  advance(1.025);
+  assert.equal(engine.getState().tracks.filter(t => t.active).length, 50);
+  assert.equal(notes().filter(source => Math.abs(source.time - 1.025) < 1e-9).length, 50);
+  changes = 0;
+  engine.setActiveMany([0, ...ids], false);
+  assert.equal(changes, 1);
+  assert.ok(context.sources.every(source => source.stoppedAt !== undefined));
+  assert.equal(engine.getState().tracks.some(t => t.active || t.waiting), false);
+  assert.equal(engine.getState().playing, true);
+  engine.dispose();
+});
+
+test('a cancelled group never enters later and invalid group IDs do not partially select tracks', async () => {
+  const { engine, add, advance, notes } = setup();
+  engine.setBpm(240); add('a'); add('b');
+  assert.throws(() => engine.setActiveMany(['a', 'missing'], true), /找不到/);
+  assert.equal(engine.getState().tracks.some(t => t.active), false);
+  await engine.play(); advance(.1);
+  engine.setActiveMany(['a', 'b'], true);
+  engine.setActiveMany(['a', 'b'], false);
+  advance(2.05);
+  assert.equal(engine.getState().tracks.some(t => t.active || t.waiting), false);
+  assert.equal(notes().length, 0);
   engine.dispose();
 });

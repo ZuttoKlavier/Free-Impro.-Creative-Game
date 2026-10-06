@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleDisplayName</key><string>声音课堂·学生</string>
+<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+<key>LSRequiresIPhoneOS</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>录制生活中的声音，制作不超过一秒的课堂采样。</string>
+<key>NSCameraUsageDescription</key><string>在应用内拍摄声音对象，制作作品形象。</string>
+<key>NSLocalNetworkUsageDescription</key><string>连接同一 Wi-Fi 下教师电脑的课堂服务，提交声音和节奏。</string>
+<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+<key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+<key>UILaunchScreen</key><dict><key>UIImageName</key><string>LaunchLogo</string><key>UIColorName</key><string>LaunchBackground</string><key>UIImageRespectsSafeAreaInsets</key><true/></dict>
+<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+</dict></plist>

@@ -1,0 +1,41 @@
+{
+  "wavesurfer": {
+    "ok": true,
+    "start": 0.2,
+    "end": 0.9,
+    "shadow": true
+  },
+  "tone": {
+    "ok": true,
+    "events": 8,
+    "duration": 1
+  },
+  "cropper": {
+    "ok": true,
+    "width": 128,
+    "height": 128
+  },
+  "dexie": {
+    "ok": true,
+    "blob": "audio",
+    "steps": [
+      true,
+      false
+    ]
+  },
+  "soundtouch": {
+    "ok": true,
+    "inputSeconds": 1,
+    "outputSeconds": 1.7922902494331066,
+    "estimatedHz": 440.2188765182186,
+    "processingMs": 6.199999988079071,
+    "tailNeedsFlush": true
+  },
+  "socket": {
+    "ok": true,
+    "transport": "websocket"
+  },
+  "build": {
+    "ok": true
+  }
+}

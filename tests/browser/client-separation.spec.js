@@ -5,7 +5,9 @@ test('independent teacher and student pages can stay signed in together in the s
   const suffix = crypto.randomUUID().slice(0, 8);
   for (const [page, role] of [[teacher, 'teacher'], [student, 'student']]) {
     await page.goto(role === 'teacher' ? '/teacher.html' : '/');
-    await page.locator('#classroom-tab').click(); await page.locator('#mode-register').click();
+    await page.locator('#classroom-tab').click();
+    if (role === 'student') { const response = await page.request.post('/api/student/register', { headers: { Origin: process.env.TEST_APP_ORIGIN }, data: { role, username: role + suffix, name: role, password: 'password123' } }); expect(response.status()).toBe(200); await page.reload(); await page.locator('#classroom-tab').click(); await expect(page.locator('#signed-in')).toBeVisible(); continue; }
+    await page.locator('#mode-register').click();
     await expect(page.locator('select#auth-role')).toHaveCount(0);
     await page.locator('#auth-name').fill(role); await page.locator('#auth-username').fill(role + suffix); await page.locator('#auth-password').fill('password123'); await page.locator('#auth-submit').click();
     await expect(page.locator('#signed-in')).toBeVisible();

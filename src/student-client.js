@@ -7,19 +7,19 @@ export async function exportLocalFile(blob, name) {
   }
   const files = window.FreeImproFiles;
   if (!files) throw new Error('本机文件服务不可用，请重新打开学生客户端。');
-  const id = files.begin(name, blob.type);
+  const id = await files.begin(name, blob.type);
   if (!id) throw new Error('无法创建本地文件，请检查设备剩余空间。');
   let completed = false;
   try {
     for (let offset = 0; offset < blob.size; offset += 48 * 1024) {
       const bytes = new Uint8Array(await blob.slice(offset, offset + 48 * 1024).arrayBuffer());
       const encoded = btoa(String.fromCharCode(...bytes));
-      if (!files.append(id, encoded)) throw new Error('文件保存失败，请检查剩余空间，备份最大 250 MB。');
+      if (!await files.append(id, encoded)) throw new Error('文件保存失败，请检查剩余空间，备份最大 250 MB。');
     }
-    if (!files.finish(id)) throw new Error('文件尚未保存成功，请重试。');
+    if (!await files.finish(id)) throw new Error('文件尚未保存成功，请重试。');
     completed = true;
   } finally {
-    if (!completed) files.cancel?.(id);
+    if (!completed) await files.cancel?.(id);
   }
 }
 

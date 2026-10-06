@@ -51,9 +51,25 @@ export function bindRhythmEditor({ root, room, view, escape, save, begin, settle
     barButtons.innerHTML = Array.from({ length: arrangement.bars }, (_, bar) => `<button data-rhythm-bar="${bar}" aria-label="编辑第 ${bar + 1} 小节" aria-pressed="${view.bar === bar}">${String(bar + 1).padStart(2, '0')}</button>`).join('');
     $('#rhythm-bar-label').textContent = `第 ${view.bar + 1} / ${arrangement.bars} 小节`;
     grid.innerHTML = tracks.length ? `<div class="rhythm-grid-header"><div>学生 / 声音 <span>${tracks.length} 条轨道</span></div><div class="rhythm-beats">${[1, 2, 3, 4].map(beat => `<span>第 ${beat} 拍</span>`).join('')}</div><div class="rhythm-step-numbers">${Array.from({ length: STEPS }, (_, i) => `<span>${i + 1}</span>`).join('')}</div><div class="rhythm-actions-label">本小节</div></div>${tracks.map(track => `<div class="rhythm-track" data-student-id="${escape(track.student_id)}" style="--track-colour:${colours[(track.slot - 1) % colours.length]}"><div class="rhythm-track-name"><span class="rhythm-track-number">${track.slot}</span><div><strong>${escape(track.name)}</strong><span>${escape(track.sound.name)}</span></div></div><div class="rhythm-steps" role="group" aria-label="${escape(track.name)}的节奏">${track.steps.slice(view.bar * STEPS, (view.bar + 1) * STEPS).map((on, i) => `<button class="rhythm-step${i % 4 === 0 ? ' beat-start' : ''}" data-step="${view.bar * STEPS + i}" aria-label="${escape(nameFor(track, view.bar * STEPS + i))}" aria-pressed="${on}" title="${escape(nameFor(track, view.bar * STEPS + i))}"><span aria-hidden="true"></span></button>`).join('')}</div><div class="rhythm-row-actions"><button class="text-button" data-copy-bar="${escape(track.student_id)}" aria-label="将${escape(track.name)}的本小节复制到下一小节" title="复制到下一小节">复制 →</button><button class="text-button" data-clear-bar="${escape(track.student_id)}" aria-label="清空${escape(track.name)}的本小节">清空</button></div></div>`).join('')}` : '<div class="rhythm-empty"><span aria-hidden="true">▥</span><h4>等待第一条声音轨道</h4><p>学生提交作品后，会自动出现在这里。每人一行，从空白节奏开始。</p></div>';
+    for (const track of tracks) {
+      const row = rowFor(track.student_id);
+      for (let i = view.bar * STEPS; i < (view.bar + 1) * STEPS; i++) {
+        const cell = row?.querySelector(`[data-step="${i}"]`);
+        cell?.setAttribute('aria-pressed', String(Boolean(track.steps[i])));
+        if (typeof track.steps[i] === 'number') {
+          cell.title += ` · 持续 ${track.steps[i]} 个位置`;
+          for (let j = i; j < i + track.steps[i]; j++) row?.querySelector(`[data-step="${j}"]`)?.classList.add('rhythm-held');
+        }
+      }
+    }
     controls();
   }
   function updateStep(track, step, on) {
+    for (let i = Math.floor(step / STEPS) * STEPS; i <= step; i++) if (typeof track.steps[i] === 'number' && i + track.steps[i] > step) {
+      track.steps[i] = false;
+      rowFor(track.student_id)?.querySelector(`[data-step="${i}"]`)?.setAttribute('aria-pressed', 'false');
+    }
+    rowFor(track.student_id)?.querySelectorAll('.rhythm-held').forEach(cell => cell.classList.remove('rhythm-held'));
     track.steps[step] = on;
     rowFor(track.student_id)?.querySelector(`[data-step="${step}"]`)?.setAttribute('aria-pressed', String(on));
   }

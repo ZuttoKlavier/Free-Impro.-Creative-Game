@@ -3,3 +3,53 @@
 
 .performance-member-main{display:flex;align-items:center;gap:9px;width:100%;min-width:0}.performance-replacement{border-top:1px solid var(--line);padding-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%}.performance-replacement>span{font-size:10px;color:#a18144;flex:1;overflow-wrap:anywhere}
 .many-performers .performer-art{width:38px;height:38px;font-size:24px;border-radius:12px}.many-performers .performer-name{font-size:8px;max-width:70px;padding:2px 4px}
+
+/* Both meters read the sequencer's audible position; CSS never runs a loop clock. */
+.performance-progress{--loop-progress:0;display:grid;grid-template-columns:76px minmax(0,1fr) auto;align-items:center;gap:18px;padding:17px 18px;border:1px solid var(--line);border-radius:16px;background:#fff}
+.performance-progress>div{margin:0}
+.performance-progress .loop-dial{position:relative;width:76px;height:76px;display:grid;place-items:center;color:var(--green)}
+.loop-dial svg{width:100%;height:100%;overflow:visible}
+.loop-dial circle{fill:none;stroke-width:5}
+.loop-dial-track{stroke:#e9eee2}
+.loop-dial-fill{stroke:var(--green);stroke-linecap:round;stroke-dasharray:100;stroke-dashoffset:calc(100 - var(--loop-progress)*100);transform:rotate(-90deg);transform-origin:40px 40px}
+.loop-dial>div{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:1px}
+.loop-dial strong{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums}
+.loop-dial span{font-size:10px;color:#73816c}
+.performance-progress .loop-timeline{display:block;min-width:0}
+.loop-heading,.loop-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.loop-heading{margin-bottom:10px;color:#3d594c}
+#loop-position{font-size:12px;font-weight:600}
+#loop-countdown{white-space:nowrap;font-size:11px;color:#73816c}
+.loop-bars{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:3px;margin-top:5px}
+.loop-bars>span{--bar-progress:0;position:relative;isolation:isolate;overflow:hidden;border-radius:4px;min-width:0;padding:4px 0;text-align:center;font-size:10px;color:#87947b;background:#f2f5ed}
+.loop-bars>span:before{content:'';position:absolute;inset:0;z-index:-1;background:#dce9d7;transform:scaleX(var(--bar-progress));transform-origin:left}
+.loop-bars>span.is-current{color:#3d594c;font-weight:700;box-shadow:inset 0 -2px var(--green)}
+.loop-bars>span.is-complete{color:#557267}
+.loop-footer{margin-top:9px;min-height:23px}
+.loop-beats{display:flex;gap:4px;flex-shrink:0}
+.loop-beats>span{display:grid;place-items:center;width:21px;height:21px;border-radius:50%;font-size:10px;background:#f2f5ed;color:#87947b}
+.loop-beats>span.is-current{background:var(--green);color:#fff}
+#loop-joining{font-size:10px;text-align:right;line-height:1.5;color:#73816c}
+.has-waiting #loop-joining,.has-waiting #mix-waiting{color:#a18144}
+.performance-progress .mix-summary{display:flex;flex-direction:column;align-items:center;gap:3px;padding-left:18px;border-left:1px solid var(--line);min-width:102px}
+.mix-summary strong{font-size:28px;line-height:1.15;color:var(--green);font-variant-numeric:tabular-nums}
+.mix-summary>span{font-size:11px;color:#3d594c}
+.mix-summary small{font-size:10px;color:#87947b;white-space:nowrap;margin-top:4px}
+.layer-symbol{display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;width:30px}
+.layer-signal{display:flex;align-items:center;gap:2px;height:10px;opacity:.35;transform:scaleY(.35)}
+.layer-signal i{display:block;width:3px;height:6px;border-radius:2px;background:#a1ad98}
+.layer-signal i:nth-child(2){height:10px}
+.is-layer-active .layer-signal i{background:var(--green)}
+.performance-member.is-layer-active{border-color:#bfd2b6;background:#f9fcf6}
+.performance-member.is-layer-waiting{border-color:#e5d3a9;background:#fffdf7}
+.performance-sound{font-size:10px;color:#87947b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.performance-layer-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px}
+.performance-layer-heading>div{display:flex;align-items:center;gap:8px}
+.performance-layer-heading strong{font-size:13px;color:#3d594c}
+.performance-layer-heading span{font-size:10px;color:#87947b}
+.performance-layer-heading button{font-size:11px;padding:9px 12px;white-space:nowrap}
+.performance-layer-heading+.performance-roster{margin-top:10px}
+.teacher-performance input[type=range]{margin:0;min-width:0}
+.performance-member-main>.layer-symbol{flex:0 0 30px}
+@media(max-width:900px){.performance-progress{gap:12px;padding:14px}.performance-progress .mix-summary{padding-left:12px;min-width:86px}.loop-heading{align-items:flex-start;flex-direction:column;gap:4px}}
+@media(max-width:580px){.performance-progress{grid-template-columns:60px minmax(0,1fr);gap:12px}.performance-progress .loop-dial{width:60px;height:60px}.loop-dial strong{font-size:21px}.performance-progress .mix-summary{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);padding:10px 0 0;flex-direction:row;justify-content:center;gap:8px}.mix-summary strong{font-size:19px}.mix-summary small{margin-top:0}.loop-bars{grid-auto-flow:row;grid-template-columns:repeat(8,minmax(0,1fr))}.loop-footer{align-items:flex-start;flex-direction:column;gap:6px}#loop-joining{text-align:left}.performance-layer-heading{align-items:flex-start}.performance-layer-heading>div:first-child{flex-direction:column;align-items:flex-start;gap:4px}.performance-layer-heading>div:last-child{gap:5px}.performance-layer-heading button{padding:9px}}

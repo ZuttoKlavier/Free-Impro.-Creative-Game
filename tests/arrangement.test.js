@@ -58,6 +58,32 @@ const room = async (teacher, capacity = 15) => {
 };
 const get = async (teacher, classroom) => (await teacher(`/classrooms/${classroom.id}`)).data.classroom.arrangement;
 const pattern = (length, ...active) => Array.from({ length }, (_, index) => active.includes(index));
+test('student rhythm requests are private, approved with revision checks and do not auto-activate', async t => {
+  const f = await fixture(t), teacher = await f.register('rhythm_teacher', 'teacher'), student = await f.register('rhythm_student'), other = await f.register('rhythm_other');
+  const classroom = await room(teacher.request);
+  for (const account of [student, other]) await account.request('/join', { code: classroom.code });
+  const submitted = await f.submit(student, classroom), submissionId = submitted.submissions[0].id;
+  const path = `/classrooms/${classroom.id}`, requestId = randomUUID();
+  const rhythm = { bars: 1, steps: pattern(16, 0, 3, 7) };
+  assert.equal((await student.request(path + '/rhythm-request', { requestId, submissionId, rhythm })).status, 200);
+  assert.equal((await other.request(path)).data.classroom.rhythmRequests.length, 0);
+  assert.deepEqual((await get(teacher.request, classroom)).tracks[0].steps, pattern(16));
+  const decision = { studentId: student.user.id, requestId, decision: 'accept', revision: 0 };
+  assert.equal((await student.request(path + '/rhythm-decision', decision)).status, 403);
+  assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, revision: 99 })).status, 409);
+  const accepted = await teacher.request(path + '/rhythm-decision', decision);
+  assert.equal(accepted.status, 200); assert.deepEqual(accepted.data.classroom.arrangement.tracks[0].steps, rhythm.steps);
+  assert.equal(accepted.data.classroom.performance.playing, false);
+  assert.equal((await student.request(path + '/rhythm-request', { requestId, submissionId, rhythm })).data.classroom.rhythmRequests[0].status, 'accepted');
+  assert.equal((await teacher.request(path + '/rhythm-decision', decision)).status, 409);
+  const newer = randomUUID(); await student.request(path + '/rhythm-request', { requestId: newer, submissionId, rhythm });
+  assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, decision: 'reject' })).status, 409);
+  assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, requestId: newer, decision: 'reject' })).status, 200);
+  const retried = await student.request(path + '/rhythm-request', { requestId, submissionId, rhythm });
+  assert.equal(retried.data.classroom.rhythmRequests[0].requestId, newer);
+  assert.equal(retried.data.classroom.rhythmRequests[0].status, 'rejected');
+  assert.equal((await other.request(path + '/rhythm-request', { requestId: randomUUID(), submissionId, rhythm })).status, 409);
+});
 async function edit(teacher, classroom, arrangement, action) {
   const result = await teacher(`/classrooms/${classroom.id}/arrangement`, { revision: arrangement.revision, ...action });
   assert.equal(result.status, 200, JSON.stringify(result.data));
@@ -65,7 +91,7 @@ async function edit(teacher, classroom, arrangement, action) {
   return result.data.classroom.arrangement;
 }
 
-test('arrangement starts silent, only contains admitted submitted students in slot order, and stays private to the teacher', async t => {
+test('arrangement starts silent and students only receive their own track', async t => {
   const app = await fixture(t);
   const { request: teacher } = await app.register('teacher', 'teacher');
   const classroom = await room(teacher, 3);
@@ -74,7 +100,7 @@ test('arrangement starts silent, only contains admitted submitted students in sl
   for (const name of ['first', 'second', 'no_submission', 'waiting']) {
     const student = await app.register(name);
     const joined = await student.request('/join', { code: classroom.code });
-    assert.equal(Object.hasOwn(joined.data.classroom, 'arrangement'), false);
+    assert.deepEqual(joined.data.classroom.arrangement.tracks, []);
     students.push(student);
   }
   // Submission time differs from the order in which the students joined.
@@ -85,8 +111,8 @@ test('arrangement starts silent, only contains admitted submitted students in sl
   assert.ok(arrangement.tracks.every(track => track.steps.length === 16 && track.steps.every(step => step === false)));
   assert.equal(arrangement.revision, 0);
   const listed = (await students[0].request('/classrooms')).data.classrooms;
-  assert.ok(listed.every(item => !Object.hasOwn(item, 'arrangement')));
-  assert.equal(Object.hasOwn((await students[0].request(`/classrooms/${classroom.id}`)).data.classroom, 'arrangement'), false);
+  assert.ok(listed.every(item => item.arrangement.tracks.every(track => track.studentId === students[0].user.id)));
+  assert.deepEqual((await students[0].request(`/classrooms/${classroom.id}`)).data.classroom.arrangement.tracks.map(t => t.studentId), [students[0].user.id]);
   assert.deepEqual((await teacher('/classrooms')).data.classrooms[0].arrangement, arrangement);
 });
 

@@ -24,7 +24,7 @@ for (const event of ['freeimpro-background', 'pagehide']) {
     const context = await browser.newContext({ userAgent: 'Mozilla/5.0 FreeImproStudent/1' });
     try {
       const page = await context.newPage(); await delayedPermissions(page); await page.goto('/');
-      await page.locator('#record').click();
+      await page.locator('#studio-tab').focus(); await page.keyboard.up('Space'); await page.keyboard.down('Space');
       await expect.poll(() => page.evaluate(() => window.mediaRequests.length)).toBe(1);
       // A native permission dialog may hide the document, without leaving the application.
       await page.evaluate(() => {
@@ -34,7 +34,7 @@ for (const event of ['freeimpro-background', 'pagehide']) {
       await expect(page.locator('#record')).toBeDisabled();
       await page.evaluate(event => window.dispatchEvent(new Event(event)), event);
       await expect(page.locator('#record')).toBeEnabled();
-      await page.locator('#record').click();
+      await page.locator('#studio-tab').focus(); await page.keyboard.up('Space'); await page.keyboard.down('Space');
       await expect.poll(() => page.evaluate(() => window.mediaRequests.length)).toBe(2);
       await page.evaluate(() => window.mediaRequests[0].grant());
       await expect.poll(() => page.evaluate(() => window.mediaRequests[0].stream.getTracks().every(track => track.readyState === 'ended'))).toBe(true);
@@ -54,7 +54,7 @@ test('student camera permission survives a permission dialog but closes when the
   try {
     const page = await context.newPage(); await delayedPermissions(page); await page.goto('/');
     await page.locator('#demo').click(); await page.locator('#sound-name').fill('权限恢复'); await page.locator('#save').click();
-    await page.locator('#library-tab').click(); await page.locator('.character-edit').click(); await page.locator('#take-photo').click();
+    await page.locator('#library-tab').click(); await page.locator('.sound-open').click(); await page.locator('.character-edit').click(); await page.locator('#take-photo').click();
     await expect.poll(() => page.evaluate(() => window.mediaRequests.length)).toBe(1);
     await page.evaluate(() => {
       Object.defineProperty(document, 'hidden', { configurable: true, value: true });

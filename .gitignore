@@ -14,3 +14,8 @@ android/**/build/
 android/build/reports/
 *.apk
 *.aab
+ios/Generated/
+ios/build/
+**/xcuserdata/
+*.ipa
+*.xcarchive/

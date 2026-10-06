@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "classroom:background": "node scripts/classroom-service.js start",
+    "classroom:status": "node scripts/classroom-service.js status",
+    "classroom:stop": "node scripts/classroom-service.js stop",
+    "prepare:ios": "node scripts/prepare-ios.js",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
@@ -28,8 +32,11 @@
     "vite": "^7.1.0"
   },
   "dependencies": {
+    "dexie": "4.4.6",
+    "openai": "7.27.0",
     "pngjs": "^7.0.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "wavesurfer.js": "8.0.1"
   },
   "engines": {
     "node": ">=24.15.0"

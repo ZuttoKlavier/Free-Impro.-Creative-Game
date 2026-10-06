@@ -1,57 +1,45 @@
+import Dexie from 'dexie';
+
 export const LIMIT = 200;
 let connection;
 export function openStore() {
-  if (!connection) connection = new Promise((resolve, reject) => {
-    const request = indexedDB.open('free-impro-student', 2);
-    request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('sounds')) request.result.createObjectStore('sounds', { keyPath: 'id' }); if (!request.result.objectStoreNames.contains('outbox')) request.result.createObjectStore('outbox', { keyPath: 'key' }); };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => { connection = null; reject(request.error); };
-  });
+  if (!connection) connection = (async () => {
+    // Keep the legacy native version 2. Dexie's version(2) would upgrade to 20.
+    await new Promise((resolve, reject) => {
+      const request = indexedDB.open('free-impro-student', 2);
+      request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('sounds')) request.result.createObjectStore('sounds', { keyPath: 'id' }); if (!request.result.objectStoreNames.contains('outbox')) request.result.createObjectStore('outbox', { keyPath: 'key' }); };
+      request.onsuccess = () => { request.result.close(); resolve(); };
+      request.onerror = () => reject(request.error);
+    });
+    const db = new Dexie('free-impro-student', { indexedDB: globalThis.indexedDB, IDBKeyRange: globalThis.IDBKeyRange });
+    await db.open();
+    db.on('versionchange', () => { db.close(); connection = null; });
+    return db;
+  })().catch(error => { connection = null; throw error; });
   return connection;
 }
+export async function closeStore() { const db = await connection; connection = null; db?.close(); }
 export async function listSounds() {
   const db = await openStore();
-  return new Promise((resolve, reject) => {
-    const request = db.transaction('sounds').objectStore('sounds').getAll();
-    request.onsuccess = () => resolve(request.result.sort((a, b) => b.createdAt - a.createdAt));
-    request.onerror = () => reject(request.error);
-  });
+  return (await db.table('sounds').toArray()).sort((a, b) => b.createdAt - a.createdAt);
 }
 export async function saveSounds(items) {
-  const db = await openStore();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('sounds', 'readwrite');
-    const store = tx.objectStore('sounds');
-    let failure;
-    const request = store.getAllKeys();
-    request.onsuccess = () => {
-      if (new Set([...request.result, ...items.map(i => i.id)]).size > LIMIT) {
-        failure = new Error('作品库已满，最多保存 200 份。请先备份或删除一些声音。'); tx.abort(); return;
-      }
-      for (const item of items) store.put(item);
-    };
-    tx.oncomplete = () => resolve();
-    tx.onabort = tx.onerror = () => reject(failure || tx.error || new Error('本地保存失败，请检查设备空间。'));
+  const db = await openStore(), sounds = db.table('sounds');
+  await db.transaction('rw', sounds, async () => {
+    const keys = await sounds.toCollection().primaryKeys();
+    if (new Set([...keys, ...items.map(item => item.id)]).size > LIMIT) throw new Error('作品库已满，最多保存 200 份。请先备份或删除一些声音。');
+    if (items.length) await sounds.bulkPut(items);
   });
 }
 export async function deleteSound(id) {
   const db = await openStore();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('sounds', 'readwrite');
-    tx.objectStore('sounds').delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onabort = tx.onerror = () => reject(tx.error);
-  });
+  await db.table('sounds').delete(id);
 }
 
 export async function outbox(action, value) {
-  const db = await openStore();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('outbox', action === 'list' ? 'readonly' : 'readwrite');
-    const store = tx.objectStore('outbox'); let result;
-    const request = action === 'list' ? store.getAll() : action === 'put' ? store.put(value) : store.delete(value);
-    request.onsuccess = () => { result = request.result; };
-    tx.oncomplete = () => resolve(result);
-    tx.onabort = tx.onerror = () => reject(tx.error);
-  });
+  const db = await openStore(), table = db.table('outbox');
+  if (action === 'list') return table.toArray();
+  if (action === 'put') return table.put(value);
+  if (action === 'delete') return table.delete(value);
+  throw new Error('不支持的待发送操作。');
 }

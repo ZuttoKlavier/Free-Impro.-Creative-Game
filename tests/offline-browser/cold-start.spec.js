@@ -15,7 +15,7 @@ test('production app cold-opens offline, restores works and known classroom reco
     expect((await page.request.post('/api/student/join', { headers, data: { code: room.code } })).status()).toBe(200);
     await page.reload(); await page.locator('#classroom-tab').click();
     await expect(page.locator('#room-detail')).toContainText('离线声音课堂');
-    await page.locator('#studio-tab').click(); await page.locator('#demo').click();
+    await page.locator('#library-tab').click(); await page.locator('#demo').click();
     await page.getByLabel('给声音起个名字').fill('离线保留的杯子'); await page.getByRole('button', { name: '存入声音库' }).click();
     await expect(page.locator('#library-count')).toHaveText('1');
     const cachedPaths = await page.evaluate(async () => {
@@ -31,15 +31,15 @@ test('production app cold-opens offline, restores works and known classroom reco
     await expect(cold.locator('#connection-note')).toContainText('连接中断');
     await cold.locator('#join-form button').click();
     await expect(cold.locator('#toast')).toContainText('本地课堂记录');
-    await cold.locator('#library-tab').click(); await expect(cold.locator('.sound-card h3')).toHaveText('离线保留的杯子');
+    await cold.locator('#library-tab').click(); await expect(cold.locator('.sound-open')).toHaveAttribute('aria-label', '打开声音 离线保留的杯子');
     await cold.locator('.submit-sound').click(); await cold.locator('#submit-dialog button[value="submit"]').click();
     await expect(cold.locator('#outbox-panel')).toContainText('待发送作品');
-    await cold.locator('#studio-tab').click(); await cold.locator('#demo').click();
+    await cold.locator('#library-tab').click(); await cold.locator('#demo').click();
     await cold.getByLabel('给声音起个名字').fill('离线新声音'); await cold.getByRole('button', { name: '存入声音库' }).click();
     await expect(cold.locator('#library-count')).toHaveText('2');
     await context.setOffline(false); await cold.locator('#classroom-tab').click();
     await cold.locator('#refresh-class').click();
     await expect(cold.locator('.student-submissions')).toContainText('离线保留的杯子');
     await expect(cold.locator('#outbox-panel')).toBeEmpty();
-  } finally { await context.setOffline(false); await teacher.dispose(); }
+  } finally { await context.setOffline(false).catch(() => {}); await teacher.dispose(); }
 });

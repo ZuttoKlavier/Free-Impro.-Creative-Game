@@ -1,6 +1,8 @@
+import { resizeSteps } from './rhythm-data.js';
+import { stretchBuffer } from './time-stretch.js';
 const STEPS_PER_BAR = 16;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
-const resizePattern = (pattern, bars) => Array.from({ length: bars * STEPS_PER_BAR }, (_, i) => Boolean(pattern[i]));
+const resizePattern = (pattern, bars) => resizeSteps(pattern, bars * STEPS_PER_BAR);
 const defaultPattern = (bars) => Array.from({ length: bars * STEPS_PER_BAR }, (_, i) => i % 4 === 0);
 const position = (value) => ({ x: clamp(value.x, 0, 1), y: clamp(value.y, 0, 1) });
 
@@ -97,10 +99,23 @@ export class Sequencer {
   getState() {
     const now = this.context?.currentTime || 0;
     const fraction = this._playing && this._current ? clamp((now - this._current.time) / this._current.duration, 0, 1) : 0;
+    const steps = this._model.bars * STEPS_PER_BAR;
+    // Predict the next audible boundary from the current step, not a UI timer or
+    // the look-ahead cursor (which may already be scheduling the next loop).
+    let remaining = 0;
+    if (this._playing) {
+      const next = this._current ? this._step + 1 : 0;
+      remaining = this._current ? this._current.duration * (1 - fraction) : Math.max(0, this._startTime - now);
+      const count = steps - next;
+      const even = Math.floor(count / 2) + (count % 2 && next % 2 === 0 ? 1 : 0);
+      remaining += (60 / this._bpm / 4) * (even * (1 + this._swing) + (count - even) * (1 - this._swing));
+    }
     return {
       playing: this._playing, bpm: this._bpm, swing: this._swing, volume: this._volume,
       bars: this._model.bars, pendingBars: this._model.pendingBars, loop: this._loop,
-      step: this._step, progress: this._playing ? (this._step + fraction) / (this._model.bars * STEPS_PER_BAR) : 0,
+      step: this._step, progress: this._playing ? (this._step + fraction) / steps : 0,
+      barProgress: this._playing ? (this._step % STEPS_PER_BAR + fraction) / STEPS_PER_BAR : 0,
+      remaining,
       tracks: [...this._model.tracks.values()].map((track) => ({
         id: track.id, submissionId: track.submissionId, pattern: [...track.pattern],
         pendingPattern: track.pendingPattern && [...track.pendingPattern], active: track.active,
@@ -155,15 +170,24 @@ export class Sequencer {
   }
 
   setActive(id, active) {
+    this.setActiveMany([id], active);
+  }
+
+  // A group is committed and rescheduled once, so every new layer receives the
+  // same next-loop boundary even when 50 decoded sounds are selected together.
+  setActiveMany(ids, active) {
     this._catchUp();
-    const track = this._track(id);
-    if (active) {
-      if (this._playing && !track.active) track.waiting = true;
-      else track.active = true;
-    } else {
-      track.active = false;
-      track.waiting = false;
-      this._silence(id);
+    const tracks = [...new Set(ids)].map(id => this._track(id));
+    if (!tracks.length) return;
+    for (const track of tracks) {
+      if (active) {
+        if (this._playing && !track.active) track.waiting = true;
+        else track.active = true;
+      } else {
+        track.active = false;
+        track.waiting = false;
+        this._silence(track.id);
+      }
     }
     this._changed();
   }
@@ -340,7 +364,9 @@ export class Sequencer {
       for (const track of model.tracks.values()) {
         if (!track.active || !track.pattern[step] || !track.buffer) continue;
         const source = this.context.createBufferSource();
-        source.buffer = track.buffer;
+        const length = typeof track.pattern[step] === 'number' ? track.pattern[step] : 1;
+        const heldDuration = Array.from({ length }, (_, i) => this._duration(step + i)).reduce((a, b) => a + b, 0);
+        source.buffer = length > 1 ? stretchBuffer(this.context, track.buffer, heldDuration) : track.buffer;
         source.connect(this._gainFor(track));
         if (!this._sources.has(track.id)) this._sources.set(track.id, new Set());
         this._sources.get(track.id).add(source);

@@ -14,27 +14,27 @@ test('demo → independent slices → trim → save → refresh → rename → b
   await expect(page.locator('#library-count')).toHaveText('1');
   await page.reload();
   await page.locator('#library-tab').click();
-  await expect(page.locator('.sound-card h3')).toHaveText('杯子的声音');
+  await page.locator('.sound-open').click(); await expect(page.locator('#sound-page h3')).toHaveText('杯子的声音');
   await page.getByRole('button', { name: '命名', exact: true }).click();
   await page.getByLabel('声音新名称').fill('我的杯子');
   await page.getByRole('button', { name: '保存名称' }).click();
-  await expect(page.locator('.sound-card h3')).toHaveText('我的杯子');
-  const download = page.waitForEvent('download');
+  await page.locator('.sound-open').click(); await expect(page.locator('#sound-page h3')).toHaveText('我的杯子');
+  await page.locator('#library-tab').click(); const download = page.waitForEvent('download');
   await page.getByRole('button', { name: '备份到本地' }).click();
   const backup = await (await download).path();
-  await page.getByRole('button', { name: '删除声音', exact: true }).click();
+  await page.locator('.sound-open').click(); await page.getByRole('button', { name: '删除声音', exact: true }).click();
   await page.locator('#delete-dialog').getByRole('button', { name: '删除声音', exact: true }).click();
   await expect(page.locator('#library-count')).toHaveText('0');
   await page.locator('#backup-file').setInputFiles(backup);
-  await expect(page.locator('.sound-card h3')).toHaveText('我的杯子');
-  await page.locator('#backup-file').setInputFiles(backup);
+  await page.locator('.sound-open').click(); await expect(page.locator('#sound-page h3')).toHaveText('我的杯子');
+  await page.locator('#library-tab').click(); await page.locator('#backup-file').setInputFiles(backup);
   await expect(page.locator('#toast')).toContainText('已导入 0 份');
   expect(errors).toEqual([]);
 });
 
 test('real MediaRecorder lifecycle with synthetic browser microphone stops at 15 seconds', async ({ page }) => {
-  await page.goto('/'); await page.getByRole('button', { name: '开始录音', exact: true }).click();
-  await expect(page.locator('#record')).toContainText('结束录音');
+  await page.goto('/'); await page.locator('#studio-tab').focus(); await page.keyboard.down('Space');
+  await expect(page.locator('#studio-tab')).toHaveClass(/recording/);
   await expect(page.locator('#record-status')).toContainText('麦克风已关闭', { timeout: 19000 });
   await expect(page.locator('#editor')).toBeVisible();
   const duration = parseFloat(await page.locator('#source-duration').textContent());
@@ -44,7 +44,7 @@ test('real MediaRecorder lifecycle with synthetic browser microphone stops at 15
 test('permission rejection has clear recovery; small tablet layout does not overflow', async ({ page }) => {
   await page.addInitScript(() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('denied', 'NotAllowedError'); }; });
   await page.setViewportSize({ width: 800, height: 1100 });
-  await page.goto('/'); await page.getByRole('button', { name: '开始录音', exact: true }).click();
+  await page.goto('/'); await page.locator('#studio-tab').focus(); await page.keyboard.down('Space');
   await expect(page.locator('#toast')).toContainText('没有麦克风权限');
   await expect(page.locator('#record')).toBeEnabled();
   await page.getByRole('button', { name: '试试示例声音' }).click();
@@ -82,7 +82,7 @@ test('waveform drag selects, moves and resizes; capture clamps outside bounds; s
   await expect(page.locator('#slices .selected')).toHaveCount(0);
   await page.locator('#sound-name').fill('波形拖选'); await page.locator('#save').click();
   await expect(page.locator('#library-count')).toHaveText('1'); await page.locator('#library-tab').click();
-  await expect(page.locator('.sound-details p')).toContainText('0.800 秒');
+  await page.locator('.sound-open').click(); await expect(page.locator('.sound-details p')).toContainText('0.800 秒');
 });
 
 test('touch waveform drag selects without scrolling the page', async ({ browser }) => {

@@ -2,6 +2,7 @@ import { listSounds, saveSounds } from './storage.js';
 import { canvasBlob, normalizeGeneratedImage, toDataURL } from './images.js';
 import './characters.css';
 import { isStudentClient, capturePhoto } from './student-client.js';
+import { classroomFetch, canUseClassroom } from './classroom-transport.js';
 
 export function initCharacters({ show, notify, onSaved }) {
   const root = document.getElementById('characters-view');
@@ -11,7 +12,7 @@ export function initCharacters({ show, notify, onSaved }) {
     <div class="character-grid"><section class="panel"><div class="panel-top"><span class="section-kicker">01 / 拍照与主体</span><span class="pill">照片仅裁切后上传</span></div><h2>找到声音的主人</h2><p class="muted">将想保留的主体放在画面中间，可拖动照片并调整大小。</p><div class="photo-actions"><button id="take-photo" class="primary">拍一张照片</button><button id="import-photo" class="secondary">从相册选择</button></div>
     <div id="photo-empty" class="photo-empty"><span>◎</span><strong>杯子、树叶、你的乐器…</strong><p>从一张照片开始，发现它的另一面。</p></div><div id="crop-editor" hidden><canvas id="photo-canvas" width="512" height="512" aria-label="拖动照片选择主体" aria-describedby="crop-help"></canvas><p id="crop-help" class="muted">拖动画面选择主体，也可用下方滑块微调。</p><label class="crop-slider">放大<input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1"></label><label class="crop-slider">左右<input id="crop-x" type="range" min="-1" max="1" step="0.01" value="0"></label><label class="crop-slider">上下<input id="crop-y" type="range" min="-1" max="1" step="0.01" value="0"></label><button id="reset-crop" class="text-button">重置裁切</button></div>
     <p class="muted">支持 JPG、PNG、WebP，最大 10 MB。照片选择后不会自动发送。</p></section>
-    <section class="panel"><div class="panel-top"><span class="section-kicker">02 / 动漫小伙伴</span><span class="pill teal">统一画风 · 透明背景</span></div><h2>听得见，也看得见</h2><div id="character-preview" class="character-preview"><span id="avatar-placeholder">✦<small>你的小伙伴即将在这里出现</small></span><img id="avatar-preview" alt="生成的动漫形象" hidden></div><p id="character-status" role="status" class="muted">生成前需登录，并连接图像生成服务。</p><button id="generate-character" class="primary" disabled>生成动漫形象</button><p class="muted generation-disclosure">点击生成会将裁切后的照片发送给 OpenAI，使用服务器配置的 API 额度。仅照片用于生成，声音不会发送。</p><div class="character-save"><button id="save-character" class="secondary" disabled>保存照片草稿</button><p class="muted">保存到当前声音作品，不占用额外作品名额。已有课堂作品需重新提交后才会更新。</p></div></section></div></div>
+    <section class="panel"><div class="panel-top"><span class="section-kicker">02 / 动漫小伙伴</span><span class="pill teal">统一画风 · 透明背景</span></div><h2>听得见，也看得见</h2><div id="character-preview" class="character-preview"><span id="avatar-placeholder">✦<small>你的小伙伴即将在这里出现</small></span><img id="avatar-preview" alt="生成的动漫形象" hidden></div><p id="character-status" role="status" class="muted">生成前请在“我的”填写姓名和课堂码连接课堂。</p><button id="generate-character" class="primary" disabled>生成动漫形象</button><p class="muted generation-disclosure">点击生成会将裁切后的照片发送给 OpenAI，使用服务器配置的 API 额度。仅照片用于生成，声音不会发送。</p><div class="character-save"><button id="save-character" class="secondary" disabled>保存照片草稿</button><p class="muted">保存到当前声音作品，不占用额外作品名额。已有课堂作品需重新提交后才会更新。</p></div></section></div></div>
     <button id="cancel-generation" class="secondary" hidden>取消等待</button><input id="camera-file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>`;
   const $ = id => root.querySelector('#' + id);
   let soundId = '', bitmap = null, avatar = null, zoom = 1, panX = 0, panY = 0, avatarURL, working = false, controller, generation = 0, photoRevision = 0, configured = false, drag = null;
@@ -81,7 +82,7 @@ export function initCharacters({ show, notify, onSaved }) {
     if (!bitmap || !soundId || working) return; const ticket = ++generation; controller = new AbortController(); setWorking(true); $('character-status').textContent = '正在生成动漫小伙伴…通常需要一些时间，请稍候。';
     try {
       const photo = await toDataURL(await cropBlob());
-      const response = await fetch('/api/student/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(250000)]) });
+      const response = await classroomFetch('/api/student/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(250000)]) });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || '生成失败，请稍后重试。');
       const image = await normalizeGeneratedImage(result.image); if (ticket !== generation) return;
       avatar = image; renderAvatar(); $('character-status').textContent = '小伙伴诞生了！满意就保存，也可以再生成一个。'; $('generate-character').textContent = '重新生成形象';
@@ -95,10 +96,13 @@ export function initCharacters({ show, notify, onSaved }) {
     catch (e) { notify(e.message || '保存失败，请检查设备空间。', true); } finally { working = false; $('character-controls').inert = false; updateButtons(); }
   };
   async function checkService() {
-    try { const response = await fetch('/api/student/image-status'); const result = await response.json(); configured = result.configured === true; $('image-service-note').textContent = configured ? '已配置 OpenAI 图像服务 · 登录后可尝试生成动漫形象' : '图像生成尚未启用。请教师配置服务器 API 密钥；你仍可拍照、裁切并保存草稿。'; }
+    if (!canUseClassroom()) { configured = false; $('image-service-note').textContent = '可离线拍照、裁切并保存草稿；加入课堂后可使用联网形象生成。'; updateButtons(); return; }
+    try { const response = await classroomFetch('/api/student/image-status'); const result = await response.json(); configured = result.configured === true; $('image-service-note').textContent = configured ? '已配置 OpenAI 图像服务 · 连接课堂后可生成物品动漫形象' : '图像生成尚未启用。请教师配置服务器 API 密钥；你仍可拍照、裁切并保存草稿。'; }
     catch { configured = false; $('image-service-note').textContent = '暂时连接不上图像服务，可以先保存照片草稿。'; } updateButtons();
   }
   window.addEventListener('sounds-changed', () => refreshSounds()); window.addEventListener('online', checkService);
+  window.addEventListener('freeimpro-classroom-connected', checkService);
+  window.addEventListener('freeimpro-classroom-disconnected', () => { controller?.abort(); checkService(); });
   refreshSounds(); checkService();
   return { editSound, refresh: async () => { await refreshSounds(); await checkService(); } };
 }

@@ -63,7 +63,8 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind FROM submissions WHERE class_id=? AND status IN ('current','pending','accepted','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
     const playing = performance.read(room.id);
     for (const item of submissions) item.enabled = item.status === 'current' && playing.playing && playing.activeStudentIds.includes(item.student_id);
-    return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions, performance: playing, ...(teacher ? { layout: layout.read(room.id), arrangement: arrangement.read(room.id) } : {}) };
+    const rhythm = arrangement.read(room.id);
+    return { ...room, memberCount: one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n, members, submissions, performance: playing, rhythmRequests: arrangement.requests(room.id, teacher ? null : user.id), arrangement: teacher ? rhythm : { ...rhythm, tracks: rhythm.tracks.filter(t => t.studentId === user.id) }, ...(teacher ? { layout: layout.read(room.id) } : {}) };
   }
   async function body(req) {
     let size = 0; const chunks = [];
@@ -88,6 +89,37 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         let origin;
         try { origin = new URL(req.headers.origin); } catch { throw error(403, '请求来源无效。'); }
         if (!(secureCookies ? origin.protocol === 'https:' : ['http:', 'https:'].includes(origin.protocol)) || origin.host !== req.headers.host) throw error(403, '请从本应用页面发起操作。');
+      }
+      if (req.method === 'POST' && path === '/api/enter-classroom') {
+        if (requiredRole !== 'student') throw error(403, '请从学生端加入课堂。');
+        const data = await body(req);
+        if (!clean(data.name, 1, 30) || /[#\p{Cc}]/u.test(data.name) || !/^\d{6}$/.test(data.code || '')) throw error(400, '请填写姓名和 6 位课堂码。');
+        const key = 'enter:' + req.socket.remoteAddress, now = Date.now();
+        for (const [address, entry] of authLimits) if (now - entry.start >= 900000) authLimits.delete(address);
+        const limit = authLimits.get(key);
+        if (limit && now - limit.start < 900000 && limit.count >= 120) throw error(429, '操作过于频繁，请稍后再试。');
+        authLimits.set(key, { start: limit && now - limit.start < 900000 ? limit.start : now, count: limit && now - limit.start < 900000 ? limit.count + 1 : 1 });
+        const room = one('SELECT * FROM classrooms WHERE code=?', data.code);
+        if (!room) throw error(404, '课堂码不正确，请向老师确认。');
+        const previous = session(req), current = previous.user, name = data.name.trim();
+        const student = transaction(() => {
+          let student = current?.role === 'student' && current.name === name ? current : null;
+          if (!student) {
+            let number = 0;
+            const existing = all('SELECT username FROM users WHERE name=?', name);
+            for (const row of existing) { const suffix = row.username.slice(name.length + 1); if (row.username.startsWith(name + '#') && /^\d+$/.test(suffix)) number = Math.max(number, Number(suffix) + 1); }
+            let username = name + '#' + String(number).padStart(4, '0');
+            while (one('SELECT 1 FROM users WHERE username=?', username)) username = name + '#' + String(++number).padStart(4, '0');
+            student = { id: randomUUID(), username, name, role: 'student', salt: randomBytes(16).toString('hex'), password: randomBytes(64).toString('hex') };
+            run('INSERT INTO users VALUES(?,?,?,?,?,?)', ...Object.values(student));
+          }
+          const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n;
+          run('INSERT OR IGNORE INTO members(class_id,student_id,admitted,joined_at) VALUES(?,?,?,?)', room.id, student.id, count < room.capacity ? 1 : 0, Date.now());
+          layout.assign(room.id, student.id);
+          return student;
+        });
+        if (previous.token) run('DELETE FROM sessions WHERE token=?', previous.token);
+        setSession(res, student.id, req.clientRole); send(200, { user: publicUser(student) }); return;
       }
       if (req.method === 'POST' && ['/api/register', '/api/login'].includes(path)) {
         const key = req.socket.remoteAddress, now = Date.now();
@@ -153,10 +185,20 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         transaction(() => { const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; run('INSERT OR IGNORE INTO members(class_id,student_id,admitted,joined_at) VALUES(?,?,?,?)', room.id, user.id, count < room.capacity ? 1 : 0, Date.now()); layout.assign(room.id, user.id); });
         send(200, { classroom: snapshot(room, user) }); return;
       }
-      const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit|layout|arrangement|performance|activate))?$/.exec(path);
+      const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit|layout|arrangement|performance|activate|rhythm-request|rhythm-decision))?$/.exec(path);
       if (match) {
         const room = roomFor(user, match[1]);
         if (req.method === 'GET' && !match[2]) { send(200, { classroom: snapshot(room, user) }); return; }
+        if (req.method === 'POST' && match[2] === 'rhythm-request') {
+          if (user.role !== 'student') throw error(403, '只有学生可以提交自己的节奏。');
+          arrangement.propose(room.id, user.id, await body(req));
+          send(200, { classroom: snapshot(room, user) }); return;
+        }
+        if (req.method === 'POST' && match[2] === 'rhythm-decision') {
+          if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以接受节奏。');
+          arrangement.decide(room.id, await body(req));
+          send(200, { classroom: snapshot(room, user) }); return;
+        }
         if (req.method === 'POST' && ['performance', 'activate'].includes(match[2])) {
           if (room.teacher_id !== user.id) throw error(403, '只有本课堂教师可以控制演奏。');
           const data = await body(req);

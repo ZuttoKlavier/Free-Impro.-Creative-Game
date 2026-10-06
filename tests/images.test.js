@@ -11,11 +11,13 @@ const image = 'data:image/png;base64,' + PNG.sync.write(png).toString('base64');
 test('image adapter sends cropped image to official API, keeps secret server-side and requests transparent output', async () => {
   let called = false;
   const generator = createImageGenerator({ apiKey: 'test-not-a-real-key', fetchImpl: async (url, options) => {
+    if (url === 'data:,') return fetch(url); // SDK's local multipart compatibility check.
     called = true; assert.equal(url, 'https://api.openai.com/v1/images/edits');
-    assert.equal(options.headers.Authorization, 'Bearer test-not-a-real-key');
+    assert.equal(new Headers(options.headers).get('authorization'), 'Bearer test-not-a-real-key');
+    assert.equal(options.body.get('model'), 'gpt-image-2');
     assert.equal(options.body.get('background'), 'transparent'); assert.equal(options.body.get('n'), '1');
     assert.equal(options.body.get('image').type, 'image/png');
-    return { ok: true, json: async () => ({ data: [{ b64_json: image.split(',')[1] }] }) };
+    return Response.json({ data: [{ b64_json: image.split(',')[1] }] });
   } });
   const result = await generator.generate(image); assert.ok(called); assert.equal(result.image, image); assert.ok(!JSON.stringify(result).includes('test-not-a-real-key'));
 });
@@ -23,7 +25,17 @@ test('missing key, bad image, and upstream failure are explicit; errors never ec
   await assert.rejects(createImageGenerator({ apiKey: '' }).generate(image), /尚未配置/);
   assert.throws(() => validateImage('data:image/svg+xml;base64,AAAA'), /无效/);
   const corrupted = 'data:image/png;base64,' + Buffer.from('not an image').toString('base64'); assert.throws(() => validateImage(corrupted), /无效/);
-  await assert.rejects(createImageGenerator({ apiKey: 'private-key', fetchImpl: async () => ({ ok: false, status: 429 }) }).generate(image), /额度不足/);
+  let calls = 0;
+  await assert.rejects(createImageGenerator({ apiKey: 'private-key', fetchImpl: async url => { if (url === 'data:,') return fetch(url); calls++; return Response.json({ error: { message: 'private-key should never be echoed' } }, { status: 429 }); } }).generate(image), /额度不足/);
+  assert.equal(calls, 1, 'A billed image operation is never automatically retried');
+});
+test('image adapter rejects corrupt provider output and honours cancellation without retry', async () => {
+  const generator = createImageGenerator({ apiKey: 'test-key', fetchImpl: async () => Response.json({ data: [{ b64_json: Buffer.from('invalid').toString('base64') }] }) });
+  await assert.rejects(generator.generate(image), /有效 PNG/);
+  let calls = 0;
+  const cancelled = createImageGenerator({ apiKey: 'test-key', fetchImpl: async (_url, options) => { calls++; options.signal.throwIfAborted(); throw new DOMException('cancelled', 'AbortError'); } });
+  await assert.rejects(cancelled.generate(image, AbortSignal.abort()), error => error.status === 504);
+  assert.ok(calls <= 1);
 });
 test('generation requires login; submitted images obey classroom access and stay attached to replacements', async () => {
   const { server, db } = createApp({ dbPath: ':memory:', imageGenerator: { configured: true, generate: async () => ({ image }) } });

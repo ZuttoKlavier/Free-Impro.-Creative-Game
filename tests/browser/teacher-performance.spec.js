@@ -1,11 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { encodeWav } from '../../src/audio.js';
+import { useSilentAudioClock } from './audio-clock.js';
 
 const origin = process.env.TEST_APP_ORIGIN;
 const headers = { Origin: origin };
 const sample = Buffer.from(await encodeWav(new Float32Array(2400), 24000).arrayBuffer()).toString('base64');
 
 async function setup(page, playwright, names = ['小雨']) {
+  await useSilentAudioClock(page);
   await page.goto('/teacher.html');
   const teacher = await page.request.post('/api/teacher/register', { headers, data: { username: 'rhythm_' + crypto.randomUUID().slice(0, 8), password: 'password123', name: '节奏老师', role: 'teacher' } });
   expect(teacher.status()).toBe(200);
@@ -85,10 +87,18 @@ test('teacher selects voices, loops continuously, queues joining, exits immediat
     await expect(page.locator('#performance-stop')).toBeEnabled();
     await expect(page.locator('.performer')).toHaveCount(1);
     await expect(page.locator('#loop-position')).toContainText('第 1 遍');
+    await expect(page.locator('#loop-number')).toHaveText('1');
+    await expect(page.locator('#mix-count')).toHaveText('1');
+    await expect(page.locator('#loop-countdown')).toContainText('距下一遍');
+    await expect.poll(() => page.locator('.performance-progress').evaluate(el => Number(el.style.getPropertyValue('--loop-progress')))).toBeGreaterThan(0);
     await toggle(page, second.id).click(); await expect(participant(page, second.id)).toContainText('等待下一遍');
     await expect(page.locator('#loop-joining')).toContainText('1 位');
+    await expect(page.locator('#mix-waiting')).toContainText('＋1');
     await expect(page.locator('.performer')).toHaveCount(2, { timeout: 5000 });
+    await expect(page.locator('#mix-count')).toHaveText('2');
     await expect(page.locator('#loop-position')).toContainText('第 2 遍');
+    await expect.poll(() => page.locator('#loop-progress').evaluate(el => el.value)).toBeGreaterThan(.2);
+    await page.locator('.teacher-performance').screenshot({ path: 'test-results/teacher-layer-preview.png', style: '#toast { visibility: hidden !important; }' });
     await expect(page.locator('.teacher-waiting [data-member-slot="2"]')).toBeHidden();
     await toggle(page, first.id).click(); await expect(page.locator(`[data-performer="${first.id}"]`)).toHaveCount(0);
     await expect(page.locator('.teacher-waiting [data-member-slot="1"]')).toBeVisible();
@@ -97,12 +107,82 @@ test('teacher selects voices, loops continuously, queues joining, exits immediat
     await page.locator('.teacher-performance').screenshot({ path: 'test-results/teacher-performance.png' });
     await page.locator('#performance-stop').click();
     await expect(page.locator('#loop-progress')).toHaveAttribute('value', '0');
+    await expect(page.locator('#loop-number')).toHaveText('—');
+    await expect(page.locator('#loop-countdown')).toHaveText('等待播放');
+    await expect(page.locator('.loop-beats .is-current')).toHaveCount(0);
     await expect(page.locator('.performer')).toHaveCount(0);
     await expect(participant(page, second.id)).toContainText('已选首轮');
     await page.locator('#performance-play').click(); await expect(page.locator('#loop-position')).toContainText('第 1 遍');
     await page.locator('#performance-stop').click();
     expect(errors).toEqual([]);
   } finally { await fixture.dispose(); }
+});
+
+test('group layers wait together, cancellation survives loading, and the meter adapts to 16 bars and a narrow screen', async ({ page, playwright }) => {
+  const fixture = await setup(page, playwright, ['小雨', '小林', '小何']);
+  const [first, second, third] = fixture.students;
+  try {
+    for (const student of fixture.students) await saved(page, () => step(page, student.id, 0).click());
+    await tempo(page, 60);
+    await toggle(page, first.id).click();
+    await expect(participant(page, first.id)).toContainText('已选首轮');
+    await page.locator('#performance-play').click();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    await page.route('**/api/teacher/submissions/*/audio', async route => { await gate; await route.continue(); });
+    await page.locator('#performance-add-all').click();
+    await expect(page.locator('#performance-add-all')).toHaveText('正在准备声音…');
+    await toggle(page, second.id).click(); // Cancel this one while its sound loads.
+    release();
+    await expect(participant(page, third.id)).toContainText('等待下一遍');
+    await expect(page.locator('#mix-waiting')).toHaveText('＋1 个等待加入');
+    await expect(page.locator('.performer')).toHaveCount(2, { timeout: 5500 });
+    await expect(participant(page, second.id)).toContainText('等待区');
+    await page.locator('#performance-remove-all').click();
+    await expect(page.locator('.performer')).toHaveCount(0);
+    await expect(page.locator('#mix-count')).toHaveText('0');
+    await expect(page.locator('#performance-play')).toBeDisabled(); // Empty mix still loops.
+    await page.locator('#performance-stop').click();
+    await saved(page, () => page.locator('#rhythm-bars').selectOption('16'));
+    await expect(page.locator('[data-loop-bar]')).toHaveCount(16);
+    await page.locator('#performance-add-all').click();
+    await expect(page.locator('#mix-count')).toHaveText('3');
+    await page.locator('#performance-play').click();
+    await expect(page.locator('#loop-countdown')).toContainText('距下一遍');
+    await expect(page.locator('.loop-beats .is-current')).toHaveCount(1);
+    const countdown = await page.locator('#loop-countdown').textContent();
+    expect(Number(countdown.match(/[\d.]+/)[0])).toBeGreaterThan(60);
+    await page.locator('.performance-progress').screenshot({ path: 'test-results/teacher-loop-meter.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('[data-loop-bar="15"]')).toBeVisible();
+    await page.locator('.teacher-performance').screenshot({ path: 'test-results/teacher-performance-narrow.png' });
+    expect(await page.locator('.teacher-performance').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.locator('.performance-progress').screenshot({ path: 'test-results/teacher-loop-meter-narrow.png' });
+    await page.locator('#performance-stop').click();
+  } finally { await fixture.dispose(); }
+});
+
+test('all layers cancelled while downloading stay unselected after their downloads finish', async ({ page, playwright }) => {
+  const fixture = await setup(page, playwright, ['小雨', '小林']);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  try {
+    await page.route('**/api/teacher/submissions/*/audio', async route => { await gate; await route.continue(); });
+    await page.locator('#performance-add-all').click();
+    await expect(page.locator('#performance-add-all')).toHaveText('正在准备声音…');
+    await expect(page.locator('#performance-play')).toBeDisabled();
+    await page.locator('#performance-remove-all').click();
+    release();
+    for (const student of fixture.students) {
+      await expect(participant(page, student.id).locator('[data-track-volume]')).toBeEnabled();
+      await expect(toggle(page, student.id)).toHaveAttribute('aria-pressed', 'false');
+    }
+    await expect(page.locator('#mix-count')).toHaveText('0');
+    await expect(page.locator('#performance-play')).toBeEnabled();
+    await page.locator('#performance-add-all').click();
+    await expect(page.locator('#mix-count')).toHaveText('2');
+    await expect(page.locator('#performance-stop')).toBeDisabled(); // Selection never auto-starts playback.
+  } finally { release(); await fixture.dispose(); }
 });
 
 test('playing edits are pending, two-loop resize applies, live controls work, and stopping retains changes', async ({ page, playwright }) => {
