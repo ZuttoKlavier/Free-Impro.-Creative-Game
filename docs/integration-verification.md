@@ -14,6 +14,12 @@
 
 参数依据 [OpenAI 官方图像提示说明](https://developers.openai.com/api/docs/guides/image-prompting)。GPT Image 2 的透明背景处于预览支持阶段；使用 PNG，省略 `input_fidelity`。本机没有配置真实 API 密钥，因此已验证 SDK 请求与模拟图片绑定流程，尚未验收真实生成效果和费用。
 
+## 2026-10-07 Image 2 模型确认
+
+用户再次明确使用 OpenAI Image 2。官方模型 ID 为 [`gpt-image-2`](https://developers.openai.com/api/docs/models/gpt-image-2)，照片动漫化经 SDK `images.edit` 调用 `POST https://api.openai.com/v1/images/edits`。保留单张裁切照片、1024×1024、中等质量、透明 PNG；不传 `input_fidelity`，不自动切换其他模型或重试计费请求。参数再次按 [官方图片编辑接口](https://developers.openai.com/api/reference/resources/images/methods/edit)核对。
+
+源码及配置示例已经使用 `gpt-image-2`；本次发现本地 `.env` 将默认值覆盖为 `gpt-image-2.5-flare`，已改回 `gpt-image-2`，其余本地配置保留。既有课堂后台服务已重新加载，HTTPS 连接及证书校验通过，保留原数据库。`.env` 和密钥不上传 GitHub，只同步本次确认记录。4 项图像专项测试以模拟供应商响应验证官方地址、模型、PNG 请求、取消/失败及课堂权限；本地有效模型核对为 `gpt-image-2`，但 `OPENAI_API_KEY` 仍为空，尚未发出真实生成请求。补齐服务端密钥并重新加载课堂服务后，才能验收真实画风、透明度、耗时及费用；A05 保持部分完成。
+
 ## 保留的实现
 
 Tone、SoundTouch、Cropper 和 Socket.IO 的试验代码位于 `experiments/library-feasibility/`，尚未接管正式模块。SoundTouch 试验输出尾部长度尚不满足精确时长；其他隔离试验未覆盖完整课堂边界、审批和断线队列。现有完整 loop 加入规则、同步播放、保持音高处理和裁切交互继续保留。
