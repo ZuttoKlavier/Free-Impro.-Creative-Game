@@ -98,7 +98,16 @@ export function createArrangementStore(db) {
     if (!keysAre(data, ['studentId', 'requestId', 'decision', 'revision']) || typeof data.studentId !== 'string' || !data.studentId || typeof data.requestId !== 'string' || !Number.isSafeInteger(data.revision) || data.revision < 0 || !['accept', 'reject'].includes(data.decision)) throw failure(400, '节奏审批信息无效。');
     const request = requests(classId, data.studentId).find(r => r.requestId === data.requestId && r.status === 'pending');
     if (!request) throw failure(409, '节奏申请已更新或处理，请刷新后重试。');
-    if (data.decision === 'reject') { db.prepare("UPDATE student_rhythm_requests SET status='rejected' WHERE class_id=? AND student_id=? AND request_id=?").run(classId, data.studentId, data.requestId); return; }
+    if (data.decision === 'reject') {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        if (data.revision !== header(classId).revision) throw failure(409, '节奏已在其他页面更新，请刷新后重新处理申请。');
+        const result = db.prepare("UPDATE student_rhythm_requests SET status='rejected' WHERE class_id=? AND student_id=? AND request_id=? AND status='pending'").run(classId, data.studentId, data.requestId);
+        if (result.changes !== 1) throw failure(409, '节奏申请已更新或处理，请刷新后重试。');
+        db.exec('COMMIT');
+      } catch (e) { db.exec('ROLLBACK'); throw e; }
+      return;
+    }
     const current = db.prepare("SELECT id FROM submissions WHERE class_id=? AND student_id=? AND status='current'").get(classId, data.studentId);
     if (current?.id !== request.submissionId) throw failure(409, '学生声音已经更换，请学生重新提交节奏。');
     edit(classId, { revision: data.revision, track: { studentId: data.studentId, steps: fitRhythm(request.rhythm, header(classId).bars) } }, data);

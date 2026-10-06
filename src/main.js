@@ -6,7 +6,7 @@ import { initClassroom } from './classroom.js';
 import { initCharacters } from './characters.js';
 import { imageFromDataURL } from './images.js';
 import { detectSlices, mono, trimSamples, encodeWav, demoAudio, MAX_RECORDING } from './audio.js';
-import { listSounds, saveSounds, deleteSound, LIMIT } from './storage.js';
+import { listSounds, saveSounds, importSounds, deleteSound, LIMIT } from './storage.js';
 import { exportLocalFile, isStudentClient } from './student-client.js';
 import { createStudentRhythm } from './student-rhythm.js';
 import { validateRhythm } from './rhythm-data.js';
@@ -317,10 +317,13 @@ $('name-dialog').onclose = async () => { if ($('name-dialog').returnValue !== 's
 $('delete-dialog').onclose = async () => { if ($('delete-dialog').returnValue !== 'delete') return; try { stopPlayback(); await deleteSound(deleteId); await refreshLibrary(); notify('声音已删除'); } catch (e) { report(e); } };
 function download(blob, name) { return exportLocalFile(blob, name); }
 function asDataURL(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); }
-$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, ...item }) => ({ ...item, audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null }))); await download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 2, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); notify('备份已保存到设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
+$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, ...item }) => ({ ...item, audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null }))); const saved = await download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 2, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); if (saved !== false) notify('备份已保存到设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
 $('restore').onclick = () => $('backup-file').click();
+let restoringBackup = false;
 $('backup-file').onchange = async e => {
-  const file = e.target.files[0]; e.target.value = ''; if (!file) return; $('restore').disabled = true;
+  const file = e.target.files[0]; e.target.value = ''; if (!file) return;
+  if (restoringBackup) { notify('正在检查上一份备份，请完成后再导入。', true); return; }
+  restoringBackup = true; $('backup-file').dataset.importing = 'true'; $('restore').disabled = true;
   try {
     if (file.size > 250 * 1024 * 1024) throw new Error('备份文件过大，请选择本应用导出的备份。');
     const backup = JSON.parse(await file.text());
@@ -333,11 +336,11 @@ $('backup-file').onchange = async e => {
       const photo = backup.version === 2 && item.photo ? await imageFromDataURL(item.photo) : null;
       const avatar = backup.version === 2 && item.avatar ? await imageFromDataURL(item.avatar) : null;
       const rhythm = item.rhythm === undefined ? undefined : validateRhythm(item.rhythm);
-      if (!library.some(s => s.id === item.id)) items.push({ photo, avatar, ...(rhythm ? { rhythm } : {}), id: item.id, name: item.name.trim(), createdAt: item.createdAt, duration: buffer.duration, blob: encodeWav(buffer.getChannelData(0), buffer.sampleRate) });
+      items.push({ photo, avatar, ...(rhythm ? { rhythm } : {}), id: item.id, name: item.name.trim(), createdAt: item.createdAt, duration: buffer.duration, blob: encodeWav(buffer.getChannelData(0), buffer.sampleRate) });
     }
-    await saveSounds(items); await refreshLibrary(); notify(`已导入 ${items.length} 份声音，相同 ID 的已有作品已跳过。`);
+    const imported = await importSounds(items); await refreshLibrary(); notify(`已导入 ${imported} 份声音，相同 ID 的已有作品已跳过。`);
   } catch (error) { notify(error instanceof SyntaxError ? '备份文件无法解析，未导入任何内容。' : error.message || '导入失败，原有作品未改变。', true); }
-  finally { $('restore').disabled = false; }
+  finally { restoringBackup = false; delete $('backup-file').dataset.importing; $('restore').disabled = false; }
 };
 setView('library');
 refreshLibrary().catch(() => notify('无法打开本地声音库，请退出无痕模式或检查浏览器存储权限。', true)).finally(() => { document.documentElement.dataset.studentReady = 'true'; });

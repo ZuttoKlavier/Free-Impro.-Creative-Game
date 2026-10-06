@@ -14,12 +14,18 @@ export function teacherRoomMarkup(room, itemMarkup, escape) {
       const label = `${p.slot}号位置${member ? ' · ' + member.name : ' · 待分配'}`;
       return `<button class="place-marker${member ? ' assigned' : ''}" data-slot="${p.slot}" style="left:${p.x * 100}%;top:${p.y * 100}%" aria-label="${escape(label)}" aria-describedby="place-help" title="${escape(label)}">${p.slot}</button>`;
     }).join('')}</div><p id="layout-status" role="status" class="muted">位置保存在这间课堂，刷新后仍会保留。</p><p class="scene-explanation">这里仅显示编号位置。角色留在等待区，后续参与演奏时才进入场景。</p></section>
-    <section class="teacher-waiting"><div class="teacher-section-title"><div><span class="section-kicker">02 / 收集声音</span><h3>作品等待区</h3></div><span class="pill teal">${received.size} 份作品</span></div><p class="muted">先听一听大家的声音。新的更换申请不会覆盖原作品，直到你接受。</p><div class="teacher-roster">${members.length ? members.map(member => `<article class="member-card" data-member-slot="${member.slot}"><h3><span class="member-place">${member.slot}</span>${escape(member.name)} <span class="status-pill">${received.has(member.student_id) ? '等待演奏' : '等待提交'}</span></h3>${room.submissions.filter(s => s.student_id === member.student_id).map(item => itemMarkup(item) + (item.status === 'pending' ? `<div class="decision-actions"><button class="primary" data-id="${escape(item.id)}" data-decision="accept">接受更换</button><button class="secondary" data-id="${escape(item.id)}" data-decision="reject">保留原声音</button></div>` : '')).join('') || '<p class="muted">尚未提交作品，已保留场景位置。</p>'}</article>`).join('') : '<div class="waiting-empty"><span>♫</span><h3>等待第一位声音伙伴</h3><p>学生加入并提交后，作品会自动出现在这里。</p></div>'}</div></section></div>
+    </div>
     ${waiting ? `<section class="expansion-queue"><h3>等待教师扩容 · ${waiting} 人</h3><p class="muted">增加上方课堂人数后，按入课顺序分配名额。</p><div>${room.members.filter(m => !m.admitted).map(m => `<span class="status-pill">${escape(m.name)}</span>`).join('')}</div></section>` : ''}`;
 }
 
+export function teacherWaitingMarkup(room, itemMarkup, escape) {
+  const members = room.members.filter(m => m.admitted);
+  const received = new Set(room.submissions.filter(s => s.status === 'current').map(s => s.student_id));
+  return `<section class="teacher-waiting" aria-label="作品等待区"><div class="teacher-section-title"><div><span class="section-kicker">等待 / 加入下一遍</span><h3>作品等待区</h3></div><span class="pill teal">${received.size} 份作品</span></div><p class="muted">选择伙伴参与演奏；播放中将在下一遍起点加入。更换申请需先接受。</p><div class="teacher-roster">${members.length ? members.map(member => `<article class="member-card" data-member-slot="${member.slot}"><h3><span class="member-place">${member.slot}</span>${escape(member.name)} <span class="status-pill">${received.has(member.student_id) ? '等待演奏' : '等待提交'}</span></h3>${room.submissions.filter(s => s.student_id === member.student_id).map(item => itemMarkup(item) + (item.status === 'pending' ? `<div class="decision-actions"><button class="primary" data-id="${escape(item.id)}" data-decision="accept">接受更换</button><button class="secondary" data-id="${escape(item.id)}" data-decision="reject">保留原声音</button></div>` : '')).join('') || '<p class="muted">尚未提交作品，已保留场景位置。</p>'}${received.has(member.student_id) ? `<button class="secondary" data-waiting-toggle="${escape(member.student_id)}" aria-pressed="false">选择参与</button>` : ''}</article>`).join('') : '<div class="waiting-empty"><span>♫</span><h3>等待第一位声音伙伴</h3><p>学生加入并提交后，作品会自动出现在这里。</p></div>'}</div></section>`;
+}
+
 export function bindTeacherRoom({ root, room, save, settled, notify, begin }) {
-  const stage = root.querySelector('.teacher-scene'), status = root.querySelector('#layout-status');
+  const stage = root.querySelector('.teacher-scene-panel .teacher-scene'), status = root.querySelector('#layout-status');
   let drag = null, saving = false;
   const clamp = n => Math.max(.05, Math.min(.95, n));
   const showPosition = (marker, position) => { marker.style.left = position.x * 100 + '%'; marker.style.top = position.y * 100 + '%'; };

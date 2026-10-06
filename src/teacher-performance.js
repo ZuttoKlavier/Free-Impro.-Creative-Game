@@ -2,10 +2,11 @@ import { apiBase } from './client-role.js';
 import { Sequencer } from './sequencer.js';
 import './teacher-performance.css';
 
-export function performanceMarkup(room, escape) {
+export function performanceMarkup(room, escape, waiting = '') {
   const environment = ({ 教室: 'classroom', 厨房: 'kitchen', 操场: 'playground' })[room.background];
   return `<section class="teacher-performance" aria-labelledby="performance-title">
     <div class="teacher-section-title"><div><span class="section-kicker">合奏 / 让大家一起发声</span><h3 id="performance-title">${escape(room.background)}声音舞台</h3></div><button id="performance-fullscreen" class="secondary">全屏舞台</button></div>
+    <div class="performance-scene-layout"><div class="performance-scene-main">
     <div class="performance-stage teacher-scene ${environment}" aria-label="正在演奏的角色"><div class="scene-decoration" aria-hidden="true"></div><div class="performance-characters"></div><p class="performance-empty">选择声音伙伴，再点击播放</p></div>
     <div class="performance-progress" data-loop-state="stopped">
       <div class="loop-dial" aria-hidden="true"><svg viewBox="0 0 80 80"><circle class="loop-dial-track" cx="40" cy="40" r="34"/><circle class="loop-dial-fill" cx="40" cy="40" r="34" pathLength="100"/></svg><div><strong id="loop-number">—</strong><span>循环</span></div></div>
@@ -15,7 +16,7 @@ export function performanceMarkup(room, escape) {
         <div class="loop-footer"><div class="loop-beats" aria-hidden="true">${[1, 2, 3, 4].map(beat => `<span data-loop-beat="${beat}">${beat}</span>`).join('')}</div><span id="loop-joining">加入将在下一遍起点生效</span></div>
       </div>
       <div class="mix-summary"><strong id="mix-count">0</strong><span id="mix-label">个已选声部</span><small id="mix-waiting">同一起点 · 一起循环</small></div>
-    </div>
+    </div></div><div class="performance-waiting">${waiting}</div></div>
     <div class="performance-controls"><div class="transport"><button id="performance-play" class="primary">▶ 播放</button><button id="performance-stop" class="secondary">■ 停止</button></div><div class="tempo-control"><label for="performance-bpm">速度 BPM</label><div><button id="bpm-minus" aria-label="降低速度">−</button><input id="performance-bpm" type="number" min="40" max="240" value="100"><button id="bpm-plus" aria-label="提高速度">＋</button></div><input id="performance-tempo" aria-label="速度滑块" type="range" min="40" max="240" value="100"></div><label class="performance-slider">Swing <output id="swing-value">0%</output><input id="performance-swing" type="range" min="0" max="50" value="0"></label><label class="performance-slider">总音量 <output id="volume-value">80%</output><input id="performance-volume" type="range" min="0" max="100" value="80"></label></div>
     <p id="performance-message" role="status" class="muted"></p><p id="performance-network" role="status" class="inline-error"></p>
     <div class="performance-layer-heading"><div><strong>声音叠加</strong><span>每个伙伴一层声音 · 发声时亮起</span></div><div><button id="performance-add-all" class="secondary">全部加入</button><button id="performance-remove-all" class="secondary">全部退出</button></div></div>
@@ -24,11 +25,11 @@ export function performanceMarkup(room, escape) {
   </section>`;
 }
 
-export function createTeacherPerformance({ root, room: initialRoom, api, escape, notify, receive, settled, canPlay }) {
+export function createTeacherPerformance({ root, room: initialRoom, api, escape, notify, receive, settled, canPlay, waitingMarkup }) {
   let room = initialRoom, disposed = false, starting = false, savingPosition = false, drag = null, bound = null;
-  let revision = -1, rendered = '', lastStep = '', meterBars = 0, meterBeat = '', publishTimer = null, publishing = false, publishAgain = false, blocked = false, owned = false;
-  let joiningAll = false, groupGeneration = 0;
-  const clientId = crypto.randomUUID(), buffers = new Map(), records = new Map(), loading = new Map(), intents = new Map(), appliedPatterns = new Map();
+  let revision = -1, rendered = '', waitingRendered = '', lastStep = '', meterBars = 0, meterBeat = '', publishTimer = null, publishing = false, publishAgain = false, blocked = false, owned = false;
+  let joiningAll = false, groupGeneration = 0, transportGeneration = 0, roomGeneration = 0, startTask = Promise.resolve();
+  const clientId = crypto.randomUUID(), buffers = new Map(), records = new Map(), loading = new Map(), intents = new Map(), appliedPatterns = new Map(), decisions = new Set();
   const $ = selector => bound?.querySelector(selector);
   const engine = new Sequencer({
     onChange: () => { paint(); if (!starting) queuePublish(); },
@@ -122,6 +123,7 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
     engine.setActiveMany(engine.getState().tracks.map(t => t.id), false); paint();
   }
   function sync(nextRoom) {
+    ++roomGeneration;
     room = nextRoom;
     for (const item of room.submissions) records.set(item.id, item);
     if (revision !== room.arrangement?.revision) {
@@ -139,12 +141,24 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
     }
     paint();
   }
+  async function applySnapshot(result, generation) {
+    if (disposed) return;
+    if (generation !== roomGeneration) {
+      // Polling may already know a newer student or replacement request than
+      // this delayed mutation reply. Read again instead of rolling it back.
+      const latest = roomGeneration;
+      try { result = await api(`/classrooms/${room.id}`); }
+      catch { return; } // Normal polling will retry; the mutation already succeeded.
+      if (disposed || latest !== roomGeneration) return;
+    }
+    receive(result.classroom); sync(result.classroom);
+  }
   function queuePublish() {
     if (disposed || blocked) return;
     clearTimeout(publishTimer); publishTimer = setTimeout(publish, 70);
   }
   async function publish() {
-    if (disposed || blocked) return;
+    if (disposed || blocked || starting) return;
     if (publishing) { publishAgain = true; return; }
     publishing = true;
     try {
@@ -152,12 +166,14 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
       const submissionIds = state.tracks.filter(t => room.submissions.some(s => s.id === t.submissionId && s.status === 'accepted')).map(t => t.submissionId);
       if (!owned && !state.playing && !submissionIds.length) return;
       if (submissionIds.length) {
+        const generation = roomGeneration;
         const result = await api(`/classrooms/${room.id}/activate`, { clientId, submissionIds });
-        if (!disposed) { room = { ...room, submissions: result.classroom.submissions }; receive(result.classroom); }
+        await applySnapshot(result, generation);
       }
-      if (owned || state.playing) {
-        const result = await api(`/classrooms/${room.id}/performance`, { clientId, playing: state.playing, activeStudentIds: state.playing ? state.tracks.filter(t => t.active).map(t => t.id) : [] });
-        if (!disposed) { receive(result.classroom); if ($('#performance-network')) $('#performance-network').textContent = ''; }
+      if (owned || engine.getState().playing) {
+        const latest = engine.getState();
+        const result = await api(`/classrooms/${room.id}/performance`, { clientId, playing: latest.playing, activeStudentIds: latest.playing ? latest.tracks.filter(t => t.active).map(t => t.id) : [] });
+        if (!disposed) { receive({ ...room, performance: result.classroom.performance }); if ($('#performance-network')) $('#performance-network').textContent = ''; }
       }
     } catch (error) {
       if (disposed) return;
@@ -165,30 +181,57 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
       if ($('#performance-network')) $('#performance-network').textContent = error.status === 409 ? error.message : '课堂状态暂未同步，已载入的声音可继续演奏，正在等待连接恢复。';
     } finally { publishing = false; if (publishAgain) { publishAgain = false; queuePublish(); } }
   }
-  async function play() {
+  function play() {
     if (starting || engine.getState().playing || !canPlay()) return;
+    const generation = ++transportGeneration, previous = startTask;
+    const cancelled = () => disposed || generation !== transportGeneration;
     starting = true; blocked = false; paint();
-    try {
-      await engine.ready();
-      await engine.context.resume();
-      root.querySelectorAll('audio').forEach(audio => audio.pause());
-      await Promise.all([...loading.values()]);
-      const selected = engine.getState().tracks.filter(t => t.active);
-      if (!selected.length) throw new Error('先选择至少一位声音伙伴参与演奏。');
-      await api(`/classrooms/${room.id}/performance`, { clientId, playing: true, activeStudentIds: selected.map(t => t.id) });
-      owned = true;
-      if (disposed || !starting) {
-        await api(`/classrooms/${room.id}/performance`, { clientId, playing: false, activeStudentIds: [] });
-        return;
-      }
-      await engine.play();
-    } catch (error) { notify(error.message, true); }
-    finally { starting = false; paint(); queuePublish(); }
+    // A cancelled start must release its server claim before the next start
+    // claims the same client ID. A boolean alone lets the old task revive.
+    startTask = (async () => {
+      try {
+        await previous; if (cancelled()) return;
+        await engine.ready(); if (cancelled()) return;
+        await engine.context.resume(); if (cancelled()) return;
+        root.querySelectorAll('audio').forEach(audio => audio.pause());
+        await Promise.all([...loading.values()]); if (cancelled()) return;
+        const selected = engine.getState().tracks.filter(t => t.active);
+        if (!selected.length) throw new Error('先选择至少一位声音伙伴参与演奏。');
+        await api(`/classrooms/${room.id}/performance`, { clientId, playing: true, activeStudentIds: selected.map(t => t.id) });
+        owned = true;
+        if (cancelled()) {
+          await api(`/classrooms/${room.id}/performance`, { clientId, playing: false, activeStudentIds: [] });
+          return;
+        }
+        await engine.play();
+        if (cancelled()) engine.stop();
+      } catch (error) { if (!cancelled()) notify(error.message, true); }
+      finally { if (generation === transportGeneration) starting = false; paint(); queuePublish(); }
+    })();
+    return startTask;
   }
-  function stop() { starting = false; ++groupGeneration; joiningAll = false; engine.stop(); for (const [id] of intents) intents.set(id, !!stateTrack(id)?.active); paint(); }
+  function stop() { ++transportGeneration; starting = false; ++groupGeneration; joiningAll = false; engine.stop(); for (const [id] of intents) intents.set(id, !!stateTrack(id)?.active); paint(); }
+  async function decide(button, submissionId, decision) {
+    if (decisions.has(submissionId)) return;
+    decisions.add(submissionId); button.disabled = true; paint();
+    try {
+      const generation = roomGeneration;
+      const result = await api(`/submissions/${submissionId}/${decision}`, { clientId, defer: engine.getState().playing });
+      await applySnapshot(result, generation); settled();
+      notify(decision === 'accept' ? (engine.getState().playing ? '已接受更换，声音载入后在下一遍起点启用。' : '已接受更换，课堂作品已更新。') : '已拒绝更换，原声音保留。');
+    } catch (error) { notify(error.message, true); }
+    finally { decisions.delete(submissionId); paint(); }
+  }
   function paint() {
     if (!bound?.isConnected || disposed) return;
     const state = engine.getState();
+    const waitingSignature = JSON.stringify([room.members, room.submissions]);
+    if (waitingMarkup && waitingSignature !== waitingRendered) {
+      const focused = document.activeElement?.dataset?.waitingToggle;
+      waitingRendered = waitingSignature;
+      $('.performance-waiting').innerHTML = waitingMarkup(room);
+      if (focused) $(`[data-waiting-toggle="${focused}"]`)?.focus({ preventScroll: true });
+    }
     $('.performance-stage').classList.toggle('many-performers', state.tracks.filter(t => t.active).length > 25);
     $('#performance-play').disabled = state.playing || starting || joiningAll;
     $('#performance-play').textContent = starting ? '正在准备…' : '▶ 播放';
@@ -217,13 +260,23 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
       }).join('') : '';
       $('.performance-empty').hidden = state.playing && state.tracks.some(t => t.active);
       $('.performance-empty').textContent = state.playing ? '正在循环，等待伙伴在下一遍加入' : '选择声音伙伴，再点击播放';
-      for (const member of room.members) {
-        const card = root.querySelector(`.teacher-waiting [data-member-slot="${member.slot}"]`);
-        const track = state.tracks.find(t => t.id === member.student_id);
-        if (card) { card.hidden = state.playing && !!track?.active; const label = card.querySelector('h3 .status-pill'); if (label && current(member.student_id)) label.textContent = track?.waiting ? '等待下一遍' : '等待演奏'; }
-      }
       if (focus) $(`[data-perform-toggle="${focus}"]`)?.focus({ preventScroll: true });
     }
+    for (const member of room.members) {
+      const card = $(`.teacher-waiting [data-member-slot="${member.slot}"]`);
+      const track = state.tracks.find(t => t.id === member.student_id);
+      if (!card) continue;
+      card.hidden = state.playing && !!track?.active;
+      const label = card.querySelector('h3 .status-pill'), button = card.querySelector('[data-waiting-toggle]');
+      if (label && current(member.student_id)) label.textContent = track?.waiting ? '等待下一遍' : track?.active ? '已选首轮' : loading.has(member.student_id) ? '载入声音…' : '等待演奏';
+      if (button) {
+        button.textContent = track?.waiting ? '取消等待' : track?.active ? '取消选择' : intents.get(member.student_id) ? '取消载入' : state.playing ? '下一遍加入' : '选择参与';
+        button.setAttribute('aria-pressed', String(!!(track?.active || track?.waiting || intents.get(member.student_id))));
+      }
+    }
+    bound.querySelectorAll('[data-decision], [data-performance-decision]').forEach(button => {
+      button.disabled = decisions.has(button.dataset.id || button.dataset.submission);
+    });
     tick(state);
   }
   function tick(state) {
@@ -272,7 +325,7 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
     }
   }
   function attach() {
-    bound = root.querySelector('.teacher-performance'); rendered = ''; lastStep = ''; meterBars = 0; meterBeat = '';
+    bound = root.querySelector('.teacher-performance'); rendered = ''; waitingRendered = ''; lastStep = ''; meterBars = 0; meterBeat = '';
     $('#performance-play').onclick = play; $('#performance-stop').onclick = stop;
     $('#performance-add-all').onclick = joinAll; $('#performance-remove-all').onclick = removeAll;
     $('#performance-tempo').oninput = event => engine.setBpm(event.target.value);
@@ -284,11 +337,13 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
     $('.performance-roster').onclick = async event => {
       const button = event.target.closest('[data-perform-toggle]'); if (button) { toggle(button.dataset.performToggle); return; }
       const decision = event.target.closest('[data-performance-decision]'); if (!decision) return;
-      decision.disabled = true;
-      try {
-        const result = await api(`/submissions/${decision.dataset.submission}/${decision.dataset.performanceDecision}`, { clientId, defer: engine.getState().playing });
-        receive(result.classroom); sync(result.classroom); settled();
-      } catch (error) { notify(error.message, true); decision.disabled = false; }
+      await decide(decision, decision.dataset.submission, decision.dataset.performanceDecision);
+    };
+    $('.performance-waiting').onclick = async event => {
+      const toggleButton = event.target.closest('[data-waiting-toggle]');
+      if (toggleButton) { toggle(toggleButton.dataset.waitingToggle); return; }
+      const decision = event.target.closest('[data-decision]');
+      if (decision) await decide(decision, decision.dataset.id, decision.dataset.decision);
     };
     $('.performance-roster').oninput = event => { if (event.target.matches('[data-track-volume]')) engine.setTrackVolume(event.target.dataset.trackVolume, event.target.value / 100); };
     $('#performance-fullscreen').onclick = async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await bound.requestFullscreen(); } catch { notify('当前浏览器暂不支持全屏，请使用浏览器全屏模式。', true); } };

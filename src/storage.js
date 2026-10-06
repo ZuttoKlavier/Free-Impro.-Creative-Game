@@ -31,6 +31,16 @@ export async function saveSounds(items) {
     if (items.length) await sounds.bulkPut(items);
   });
 }
+export async function importSounds(items) {
+  const db = await openStore(), sounds = db.table('sounds');
+  return db.transaction('rw', sounds, async () => {
+    const existing = new Set(await sounds.toCollection().primaryKeys());
+    const additions = items.filter(item => !existing.has(item.id));
+    if (existing.size + additions.length > LIMIT) throw new Error('作品库已满，最多保存 200 份。请先备份或删除一些声音。');
+    if (additions.length) await sounds.bulkAdd(additions);
+    return additions.length;
+  });
+}
 export async function deleteSound(id) {
   const db = await openStore();
   await db.table('sounds').delete(id);

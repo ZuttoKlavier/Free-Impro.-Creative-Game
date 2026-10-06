@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { listSounds, outbox } from './storage.js';
 import './classroom.css';
 import { toDataURL } from './images.js';
-import { teacherRoomMarkup, bindTeacherRoom } from './teacher-room.js';
+import { teacherRoomMarkup, teacherWaitingMarkup, bindTeacherRoom } from './teacher-room.js';
 import { rhythmMarkup, bindRhythmEditor } from './teacher-rhythm.js';
 import { performanceMarkup, createTeacherPerformance } from './teacher-performance.js';
 import { isStudentClient } from './student-client.js';
@@ -112,6 +112,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
       $('room-detail').innerHTML = `<div class="panel class-detail"><div class="room-title"><div><span class="section-kicker">${escape(room.background)} · ${room.memberCount} / ${room.capacity} 人</span><h2>${escape(room.name)}</h2></div><div class="room-code"><small>课堂码</small><strong>${escape(room.code)}</strong></div></div>${teacher ? teacherMarkup(room) : studentMarkup(room) + classroomRhythmMarkup(room, sounds, false, escape)}</div>`;
       if (teacher) {
         if (!performance) performance = createTeacherPerformance({ root, room, api, escape, notify,
+          waitingMarkup: updated => teacherWaitingMarkup(updated, itemMarkup, escape),
           canPlay: () => { if (!rhythmBinding?.busy) return true; notify('节奏尚未保存，请先等待保存完成或重试。', true); return false; },
           receive: (updated, withLayout = false) => {
             layoutVersion++; rooms = rooms.map(r => r.id === updated.id ? { ...r, members: updated.members, memberCount: updated.memberCount, submissions: updated.submissions, performance: updated.performance, ...(withLayout ? { layout: updated.layout } : {}) } : r); writeCache(cacheKey(), rooms);
@@ -143,7 +144,6 @@ export function initClassroom({ notify, show, stopPlayback }) {
         const joinURL = new URL(joinBase); joinURL.search = '?class=' + room.code; joinURL.hash = '';
         const qr = $('room-qr'); QRCode.toDataURL(joinURL.href, { width: 140, margin: 1 }).then(url => { if (qr.isConnected) qr.src = url; }).catch(() => { if (qr.isConnected) qr.alt = '二维码生成失败，请使用课堂码'; });
         $('capacity-form').onsubmit = event => { event.preventDefault(); action($('capacity-form'), async () => { await api('/classrooms/' + room.id + '/capacity', { capacity: Number($('increase-capacity').value) }); await refresh(); }); };
-        root.querySelectorAll('[data-decision]').forEach(button => button.onclick = async () => { button.disabled = true; try { const result = await api('/submissions/' + button.dataset.id + '/' + button.dataset.decision, { clientId: performance?.clientId, defer: !!performance?.playing }); updateRoom(result); renderRooms(); notify(button.dataset.decision === 'accept' ? (performance?.playing ? '已接受更换，声音载入后在下一遍起点启用。' : '已接受更换，课堂作品已更新。') : '已拒绝更换，原声音保留。'); } catch (e) { notify(e.message, true); await refresh(); } });
         root.querySelectorAll('[data-rhythm-accept], [data-rhythm-reject]').forEach(button => button.onclick = async () => {
           if (savingEdits()) { notify('请先等待当前修改保存。'); return; }
           button.disabled = true;
@@ -180,7 +180,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
     const admitted = room.members.find(m => m.student_id === user.id)?.admitted;
     return `${!admitted ? '<p class="waiting-note">课堂人数已满，等待教师扩容后即可提交。</p>' : ''}<div class="student-submissions">${room.submissions.length ? room.submissions.map(itemMarkup).join('') : '<p class="muted">还没有提交声音。请选择本地作品，将你的声音加入课堂。</p>'}</div><div class="submission-picker"><label for="class-sound">选择本地声音</label><div class="save-row"><select id="class-sound">${sounds.length ? sounds.map(s => `<option value="${escape(s.id)}">${escape(s.name)} · ${s.duration.toFixed(2)} 秒</option>`).join('') : '<option>先到声音库保存一份作品</option>'}</select><button id="send-sound" class="primary" ${!admitted || !sounds.length ? 'disabled' : ''}>${room.submissions.some(s => s.status === 'current') ? '申请更换声音' : '提交声音'}</button></div><p class="muted">作品中的照片或动漫形象会与声音一起提交。照片草稿会明确标注。</p></div>`;
   }
-  function teacherMarkup(room) { return teacherRoomMarkup(room, itemMarkup, escape) + classroomRhythmMarkup(room, [], true, escape) + performanceMarkup(room, escape) + rhythmMarkup(room, escape, rhythmView(room.id)); }
+  function teacherMarkup(room) { return teacherRoomMarkup(room, itemMarkup, escape) + classroomRhythmMarkup(room, [], true, escape) + performanceMarkup(room, escape, teacherWaitingMarkup(room, itemMarkup, escape)) + rhythmMarkup(room, escape, rhythmView(room.id)); }
   async function loadLocal() { if (clientRole === 'teacher') { sounds = []; queue = []; return; } sounds = await listSounds(); queue = (await outbox('list')).filter(q => q.userId === user?.id); }
   async function refresh(explicit = false) {
     if (!canUseClassroom()) { await loadLocal(); renderIdentity(); renderRooms(); return; }

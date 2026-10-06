@@ -1,6 +1,6 @@
 # 产品需求与 GitHub 方案对照
 
-核对日期：2026-10-03。以下表格保留初始候选评价。WaveSurfer、Dexie 与官方 OpenAI SDK 已接入，实际版本、替换范围及运行核对见 [开源组件接入记录](integration-verification.md)；其余候选尚未进入正式模块。
+核对日期：2026-10-06。以下表格保留 10 月 3 日初始候选评价。WaveSurfer、Dexie 与官方 OpenAI SDK 已接入，实际版本、替换范围及运行核对见 [开源组件接入记录](integration-verification.md)。本轮新增 ZXing 应用内扫码和受控原生文件流程，并实际调用 Bless/Bleak 做隔离可行性实验，详见 [未完成项接入与缺陷复核](github-completion-integration.md)；蓝牙仍未接入课堂，其余候选没有因此被采用。
 
 | 需求 | 对应方案 | 结合当前代码的结论 |
 | --- | --- | --- |

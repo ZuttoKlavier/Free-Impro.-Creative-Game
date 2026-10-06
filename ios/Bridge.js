@@ -30,20 +30,38 @@
     finish: id => call('finish', { id }),
     cancel: id => call('cancel', { id }),
   };
+  let importing = false;
   document.addEventListener('click', async event => {
     const input = event.target.closest('input[type="file"]'); if (!input) return;
     event.preventDefault(); event.stopImmediatePropagation();
+    if (importing) return;
+    importing = true;
+    let selected;
     try {
-      if (!['backup-file', 'audio-file'].includes(input.id)) { alert('请使用应用内拍照。'); return; }
-      const name = await call('choose', { backup: input.id === 'backup-file' }); if (!name) return;
+      const kind = ({ 'backup-file': 'backup', 'audio-file': 'audio', 'photo-file': 'photo' })[input.id];
+      if (!kind) { alert('请使用应用内拍照或作品导入入口。'); return; }
+      const photoTarget = kind === 'photo' ? document.getElementById('character-sound')?.value : null;
+      const targetMatches = () => kind !== 'photo' || document.getElementById('character-sound')?.value === photoTarget;
+      selected = await call('choose', { kind }); if (!selected) return;
+      if (!targetMatches()) return;
+      const limits = { backup: 250 * 1024 * 1024, audio: 25 * 1024 * 1024, photo: 10 * 1024 * 1024 };
+      if (!selected.id || !selected.name || !selected.mime || !Number.isInteger(selected.size) || selected.size <= 0 || selected.size > limits[kind]) throw new Error('文件类型或大小无效。');
       const chunks = []; let offset = 0;
       while (true) {
-        const encoded = await call('read', { name, offset }); if (!encoded) break;
+        if (!targetMatches()) return;
+        const encoded = await call('read', { id: selected.id, offset }); if (!encoded) break;
+        if (!targetMatches()) return;
         const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0)); chunks.push(bytes); offset += bytes.length;
-        if (offset > 250 * 1024 * 1024) throw new Error('文件过大。');
+        if (offset > selected.size || offset > limits[kind]) throw new Error('文件过大或已发生变化。');
       }
-      const data = new DataTransfer(); data.items.add(new File(chunks, name, { type: input.id === 'backup-file' ? 'application/json' : 'audio/wav' }));
+      if (offset !== selected.size) throw new Error('文件未完整读取，请重新选择。');
+      if (!targetMatches()) return;
+      const data = new DataTransfer(); data.items.add(new File(chunks, selected.name, { type: selected.mime }));
       input.files = data.files; input.dispatchEvent(new Event('change', { bubbles: true }));
     } catch (error) { alert(error.message || '本地文件操作失败。'); }
+    finally {
+      if (selected?.id) await call('release', { id: selected.id }).catch(() => {});
+      importing = false;
+    }
   }, true);
 })();

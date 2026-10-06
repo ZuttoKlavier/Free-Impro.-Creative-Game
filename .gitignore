@@ -19,3 +19,5 @@ ios/build/
 **/xcuserdata/
 *.ipa
 *.xcarchive/
+__pycache__/
+*.py[cod]

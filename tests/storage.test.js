@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listSounds, saveSounds, deleteSound, outbox, closeStore } from '../src/storage.js';
+import { listSounds, saveSounds, importSounds, deleteSound, outbox, closeStore } from '../src/storage.js';
 
 const NAME = 'free-impro-student';
 const raw = version => new Promise((resolve, reject) => { const request = indexedDB.open(NAME, version); request.onerror = () => reject(request.error); request.onsuccess = () => resolve(request.result); });
@@ -24,6 +24,16 @@ test('Dexie preserves native-v2 audio, images, rhythm and pending classroom subm
   await outbox('delete', 'queued'); assert.deepEqual(await outbox('list'), []);
   await deleteSound('old'); assert.deepEqual(await listSounds(), []);
 });
+test('concurrent backup transactions skip duplicate IDs without replacing the first committed content', async t => {
+  t.after(closeStore);
+  const counts = await Promise.all([importSounds([{ id: 'import-race', name: 'first', blob: new Blob(['first']) }]), importSounds([{ id: 'import-race', name: 'second', blob: new Blob(['second']) }])]);
+  assert.deepEqual(counts.sort(), [0, 1]);
+  const [sound] = await listSounds(); assert.equal(sound.name, 'first'); assert.equal(await sound.blob.text(), 'first');
+  assert.equal(await importSounds([{ ...sound, name: 'must not replace' }]), 0);
+  await assert.rejects(importSounds([{ id: 'would-add' }, { name: 'missing id' }]));
+  assert.deepEqual((await listSounds()).map(s => s.id), ['import-race']);
+  await deleteSound('import-race');
+});
 test('capacity and bulk errors roll back atomically; concurrent writes cannot exceed 200', async t => {
   t.after(closeStore);
   await saveSounds(Array.from({ length: 199 }, (_, i) => ({ id: String(i), createdAt: i })));
@@ -35,4 +45,6 @@ test('capacity and bulk errors roll back atomically; concurrent writes cannot ex
   await deleteSound('198');
   await assert.rejects(saveSounds([{ id: '0', name: 'must also roll back' }, { name: 'missing id' }]));
   assert.equal((await listSounds()).find(s => s.id === '0').name, undefined);
+  await assert.rejects(importSounds([{ id: 'overflow-1' }, { id: 'overflow-2' }]), /作品库已满/);
+  assert.equal((await listSounds()).some(s => s.id === 'overflow-1'), false);
 });

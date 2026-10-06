@@ -78,11 +78,62 @@ test('student rhythm requests are private, approved with revision checks and do 
   assert.equal((await teacher.request(path + '/rhythm-decision', decision)).status, 409);
   const newer = randomUUID(); await student.request(path + '/rhythm-request', { requestId: newer, submissionId, rhythm });
   assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, decision: 'reject' })).status, 409);
-  assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, requestId: newer, decision: 'reject' })).status, 200);
+  assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, requestId: newer, decision: 'reject' })).status, 409);
+  assert.equal((await student.request(path)).data.classroom.rhythmRequests[0].status, 'pending');
+  assert.equal((await teacher.request(path + '/rhythm-decision', { ...decision, requestId: newer, decision: 'reject', revision: accepted.data.classroom.arrangement.revision })).status, 200);
   const retried = await student.request(path + '/rhythm-request', { requestId, submissionId, rhythm });
   assert.equal(retried.data.classroom.rhythmRequests[0].requestId, newer);
   assert.equal(retried.data.classroom.rhythmRequests[0].status, 'rejected');
   assert.equal((await other.request(path + '/rhythm-request', { requestId: randomUUID(), submissionId, rhythm })).status, 409);
+});
+
+test('stale rhythm rejection preserves the latest pending request and saved track until refreshed', async t => {
+  const f = await fixture(t), teacher = await f.register('reject_teacher', 'teacher'), student = await f.register('reject_student');
+  const classroom = await room(teacher.request);
+  await student.request('/join', { code: classroom.code });
+  const submitted = await f.submit(student, classroom), submissionId = submitted.submissions[0].id;
+  const path = `/classrooms/${classroom.id}`, firstId = randomUUID(), latestId = randomUUID();
+  const propose = requestId => student.request(path + '/rhythm-request', { requestId, submissionId, rhythm: { bars: 1, steps: pattern(16, 2, 6) } });
+  await propose(firstId);
+  const saved = await edit(teacher.request, classroom, await get(teacher.request, classroom), { track: { studentId: student.user.id, steps: pattern(16, 0, 4) } });
+  await propose(latestId);
+  const reject = (requestId, revision) => teacher.request(path + '/rhythm-decision', { studentId: student.user.id, requestId, revision, decision: 'reject' });
+  const stale = await reject(latestId, 0);
+  assert.equal(stale.status, 409); assert.match(stale.data.error, /更新.*刷新/);
+  assert.equal((await reject(firstId, saved.revision)).status, 409);
+  const unchanged = (await teacher.request(path)).data.classroom;
+  assert.deepEqual(unchanged.arrangement, saved);
+  assert.equal(unchanged.rhythmRequests[0].requestId, latestId);
+  assert.equal(unchanged.rhythmRequests[0].status, 'pending');
+  const refreshed = await reject(latestId, saved.revision);
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(refreshed.data.classroom.arrangement, saved);
+  assert.equal(refreshed.data.classroom.rhythmRequests[0].status, 'rejected');
+  assert.equal((await reject(latestId, saved.revision)).status, 409);
+});
+
+test('competing accept and reject process a pending rhythm once and cannot change a newer request', async t => {
+  const f = await fixture(t), teacher = await f.register('decision_teacher', 'teacher'), student = await f.register('decision_student');
+  const classroom = await room(teacher.request);
+  await student.request('/join', { code: classroom.code });
+  const submitted = await f.submit(student, classroom), submissionId = submitted.submissions[0].id;
+  const path = `/classrooms/${classroom.id}`, rhythm = { bars: 1, steps: pattern(16, 1, 5) };
+  const propose = requestId => student.request(path + '/rhythm-request', { requestId, submissionId, rhythm });
+  const requestId = randomUUID(); await propose(requestId);
+  const decide = (id, decision, revision) => teacher.request(path + '/rhythm-decision', { studentId: student.user.id, requestId: id, decision, revision });
+  const competing = await Promise.all([decide(requestId, 'accept', 0), decide(requestId, 'reject', 0)]);
+  assert.deepEqual(competing.map(result => result.status).sort(), [200, 409]);
+  const processed = (await teacher.request(path)).data.classroom;
+  const winner = competing[0].status === 200 ? 'accepted' : 'rejected';
+  assert.equal(processed.rhythmRequests[0].status, winner);
+  assert.deepEqual(processed.arrangement.tracks[0].steps, winner === 'accepted' ? rhythm.steps : pattern(16));
+  const latestId = randomUUID(); await propose(latestId);
+  assert.equal((await decide(requestId, 'reject', processed.arrangement.revision)).status, 409);
+  assert.equal((await propose(requestId)).data.classroom.rhythmRequests[0].requestId, latestId);
+  const unchanged = (await teacher.request(path)).data.classroom;
+  assert.equal(unchanged.rhythmRequests[0].status, 'pending');
+  assert.deepEqual(unchanged.arrangement, processed.arrangement);
+  assert.equal((await decide(latestId, 'reject', processed.arrangement.revision)).status, 200);
 });
 async function edit(teacher, classroom, arrangement, action) {
   const result = await teacher(`/classrooms/${classroom.id}/arrangement`, { revision: arrangement.revision, ...action });

@@ -1,0 +1,12 @@
+{
+  "bless": "0.3.0",
+  "bleak": "3.0.2",
+  "packet_tests_passed": 9,
+  "library": {
+    "library_import": true,
+    "gatt_roundtrip": true,
+    "hardware_used": false
+  },
+  "classroom_integrated": false,
+  "android_windows_radio_tested": false
+}

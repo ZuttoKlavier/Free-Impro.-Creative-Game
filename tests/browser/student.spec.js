@@ -1,4 +1,43 @@
 import { test, expect } from '@playwright/test';
+import { encodeWav } from '../../src/audio.js';
+
+test('concurrent native backup events cannot overwrite an importing duplicate ID', async ({ page }) => {
+  const audio = 'data:audio/wav;base64,' + Buffer.from(await encodeWav(new Float32Array(4800).fill(.1), 48000).arrayBuffer()).toString('base64');
+  const backup = name => ({ name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ format: 'free-impro-sounds', version: 1, sounds: [{ id: 'shared-import-id', name, createdAt: 1, audio }] })) });
+  await page.addInitScript(() => {
+    const decode = AudioContext.prototype.decodeAudioData;
+    AudioContext.prototype.decodeAudioData = async function (...args) {
+      window.__backupDecodeStarted = true;
+      await new Promise(resolve => { window.__finishBackupDecode = resolve; });
+      return decode.apply(this, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#backup-file').setInputFiles(backup('第一份备份'));
+  await expect.poll(() => page.evaluate(() => window.__backupDecodeStarted)).toBe(true);
+  await page.locator('#backup-file').setInputFiles(backup('第二份覆盖内容'));
+  await expect(page.locator('#toast')).toContainText('正在检查上一份备份');
+  await page.evaluate(() => window.__finishBackupDecode());
+  await expect(page.locator('#library-count')).toHaveText('1');
+  await page.locator('.sound-open').click(); await expect(page.locator('#sound-page h3')).toHaveText('第一份备份');
+  await expect(page.locator('#restore')).toBeEnabled();
+});
+
+test('backup restores an ID deleted in another tab even when this page still displays the old library', async ({ page, context }) => {
+  const audio = 'data:audio/wav;base64,' + Buffer.from(await encodeWav(new Float32Array(4800).fill(.1), 48000).arrayBuffer()).toString('base64');
+  const backup = { name: 'backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ format: 'free-impro-sounds', version: 1, sounds: [{ id: 'deleted-in-other-tab', name: '跨页恢复的声音', createdAt: 1, audio }] })) };
+  await page.goto('/'); await page.locator('#backup-file').setInputFiles(backup);
+  await expect(page.locator('#library-count')).toHaveText('1');
+  const other = await context.newPage();
+  try {
+    await other.goto('/');
+    await other.evaluate(async () => { const storage = await import('/src/storage.js'); await storage.deleteSound('deleted-in-other-tab'); });
+    expect(await other.evaluate(async () => (await (await import('/src/storage.js')).listSounds()).length)).toBe(0);
+    await expect(page.locator('#library-count')).toHaveText('1');
+    await page.locator('#backup-file').setInputFiles(backup);
+    await expect(page.locator('#toast')).toContainText('已导入 1 份');
+    expect(await other.evaluate(async () => (await (await import('/src/storage.js')).listSounds())[0]?.name)).toBe('跨页恢复的声音');
+  } finally { await other.close(); }
+});
 
 test('demo → independent slices → trim → save → refresh → rename → backup → delete → restore', async ({ page }) => {
   const errors = []; page.on('pageerror', e => errors.push(e.message));

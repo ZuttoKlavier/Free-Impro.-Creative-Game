@@ -14,6 +14,14 @@ public final class UrlPolicy {
         } catch (Exception e) { throw new IllegalArgumentException("请输入完整的课堂 HTTPS 地址，不包含账号、路径或课堂码。"); }
     }
     public String address() { return origin.toString(); }
+    /** QR content is a code only; it never becomes a WebView navigation target. */
+    public String classroomCode(String value) {
+        if (value == null || value.length() > 500) return "";
+        if (value.matches("[0-9]{6}")) return value;
+        if (!navigation(value)) return "";
+        try { String query = new URI(value).getRawQuery(); return query != null && query.matches("class=[0-9]{6}") ? query.substring(6) : ""; }
+        catch (Exception e) { return ""; }
+    }
     private static int port(URI uri) { return uri.getPort() < 0 ? 443 : uri.getPort(); }
     public boolean sameOrigin(String value) {
         try {

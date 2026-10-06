@@ -8,6 +8,7 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private var localOrigin: StudentPolicy?
     private let classroom = ClassroomConnection()
     private var files: LocalFiles?
+    private var filePicker: ControlledFilePicker?
     private var boot = 0
     private var connectionFailed = false
     private var failurePullReady = false
@@ -40,7 +41,7 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
             logo.centerXAnchor.constraint(equalTo: launchCover.centerXAnchor), logo.centerYAnchor.constraint(equalTo: launchCover.centerYAnchor), logo.widthAnchor.constraint(equalToConstant: 104), logo.heightAnchor.constraint(equalToConstant: 104),
             status.topAnchor.constraint(equalTo: logo.bottomAnchor, constant: 28), status.leadingAnchor.constraint(equalTo: launchCover.leadingAnchor, constant: 28), status.trailingAnchor.constraint(equalTo: launchCover.trailingAnchor, constant: -28)
         ])
-        do { files = try LocalFiles() } catch { /* File operations report a local error when requested. */ }
+        do { let storage = try LocalFiles(); files = storage; filePicker = ControlledFilePicker(presenter: self, files: storage) } catch { /* File operations report a local error when requested. */ }
         NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(foreground), name: UIApplication.didBecomeActiveNotification, object: nil)
         // Pin local storage to the previous app origin once; service settings
@@ -127,7 +128,9 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
         }); present(alert, animated: true)
     }
     private func loadLocalApp() {
-        boot += 1; let ticket = boot; web.stopLoading(); connectionFailed = false; failurePullReady = false; status.text = nil; launchCover.isHidden = false
+        boot += 1; let ticket = boot
+        filePicker?.resetForDocument(); files?.schedule { $0.resetForDocument() }
+        web.stopLoading(); connectionFailed = false; failurePullReady = false; status.text = nil; launchCover.isHidden = false
         let rulesJSON = "[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":\"block\"}}]"
         WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "student-offline-only", encodedContentRuleList: rulesJSON) { [weak self] rules, _ in
             guard let self, ticket == self.boot else { return }
@@ -154,7 +157,7 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
     @objc private func reconnect() { loadLocalApp() }
     @objc private func background() {
         web?.evaluateJavaScript("window.dispatchEvent(new Event('freeimpro-background'))", completionHandler: nil)
-        web?.setAllMediaPlaybackSuspended(true); web?.setMicrophoneCaptureState(.none); web?.setCameraCaptureState(.none); files?.cancelAll()
+        web?.setAllMediaPlaybackSuspended(true); web?.setMicrophoneCaptureState(.none); web?.setCameraCaptureState(.none); files?.schedule { $0.cancelAll() }
     }
     @objc private func foreground() { web?.setAllMediaPlaybackSuspended(false) }
     private func message(_ text: String) { let alert = UIAlertController(title: "声音课堂", message: text, preferredStyle: .alert); alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true) }
@@ -221,21 +224,31 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
         default: break
         }
         guard let files else { replyHandler(nil, "本地文件接口不可用。"); return }
-        do {
+        if action == "choose" {
+            guard let kind = LocalImportKind(rawValue: body["kind"] as? String ?? ""), let filePicker else { replyHandler(nil, "文件类型无效。"); return }
+            filePicker.choose(kind: kind, reply: replyHandler); return
+        }
+        let ticket = boot
+        files.perform({ files -> Any? in
             switch action {
-            case "begin": replyHandler(try files.begin(name: body["name"] as? String ?? "", mime: body["mime"] as? String ?? ""), nil)
-            case "append": replyHandler(try files.append(id: body["id"] as? String ?? "", encoded: body["encoded"] as? String ?? ""), nil)
-            case "finish": replyHandler(try files.finish(body["id"] as? String ?? ""), nil)
-            case "cancel": files.cancel(body["id"] as? String ?? ""); replyHandler(true, nil)
-            case "read": replyHandler(try files.read(name: body["name"] as? String ?? "", offset: body["offset"] as? Int ?? -1), nil)
-            case "choose":
-                guard presentedViewController == nil else { replyHandler(nil, "请先关闭当前窗口。"); return }
-                let names = try files.list(backup: body["backup"] as? Bool ?? true)
-                let alert = UIAlertController(title: "本地备份", message: names.isEmpty ? "尚无本应用导出的文件。" : "仅显示本应用导出的文件。", preferredStyle: .actionSheet)
-                for name in names.prefix(100) { alert.addAction(UIAlertAction(title: String(name.dropFirst(37)), style: .default) { _ in replyHandler(name, nil) }) }
-                alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in replyHandler(NSNull(), nil) }); alert.popoverPresentationController?.sourceView = view; present(alert, animated: true)
-            default: replyHandler(nil, "不支持的文件操作。")
+            case "begin": return try files.begin(name: body["name"] as? String ?? "", mime: body["mime"] as? String ?? "")
+            case "append": return try files.append(id: body["id"] as? String ?? "", encoded: body["encoded"] as? String ?? "")
+            case "finish": return try files.finish(body["id"] as? String ?? "")
+            case "cancel": files.cancel(body["id"] as? String ?? ""); return true
+            case "read": return try files.readImport(id: body["id"] as? String ?? "", offset: body["offset"] as? Int ?? -1)
+            case "release": files.releaseImport(body["id"] as? String ?? ""); return true
+            default: throw NSError(domain: "FreeImpro", code: 1, userInfo: [NSLocalizedDescriptionKey: "不支持的文件操作。"])
             }
-        } catch { replyHandler(nil, error.localizedDescription) }
+        }) { [weak self] result in
+            guard let self, self.boot == ticket else { replyHandler(NSNull(), nil); return }
+            switch result {
+            case .failure(let error): replyHandler(nil, error.localizedDescription)
+            case .success(let value):
+                if action == "finish", let url = value as? URL {
+                    guard let filePicker = self.filePicker else { replyHandler(nil, "文件选择服务不可用。"); return }
+                    filePicker.export(url, reply: replyHandler)
+                } else { replyHandler(value, nil) }
+            }
+        }
     }
 }

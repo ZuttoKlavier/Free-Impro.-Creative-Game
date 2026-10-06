@@ -15,7 +15,7 @@ export function initCharacters({ show, notify, onSaved }) {
     <section class="panel"><div class="panel-top"><span class="section-kicker">02 / 动漫小伙伴</span><span class="pill teal">统一画风 · 透明背景</span></div><h2>听得见，也看得见</h2><div id="character-preview" class="character-preview"><span id="avatar-placeholder">✦<small>你的小伙伴即将在这里出现</small></span><img id="avatar-preview" alt="生成的动漫形象" hidden></div><p id="character-status" role="status" class="muted">生成前请在“我的”填写姓名和课堂码连接课堂。</p><button id="generate-character" class="primary" disabled>生成动漫形象</button><p class="muted generation-disclosure">点击生成会将裁切后的照片发送给 OpenAI，使用服务器配置的 API 额度。仅照片用于生成，声音不会发送。</p><div class="character-save"><button id="save-character" class="secondary" disabled>保存照片草稿</button><p class="muted">保存到当前声音作品，不占用额外作品名额。已有课堂作品需重新提交后才会更新。</p></div></section></div></div>
     <button id="cancel-generation" class="secondary" hidden>取消等待</button><input id="camera-file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>`;
   const $ = id => root.querySelector('#' + id);
-  let soundId = '', bitmap = null, avatar = null, zoom = 1, panX = 0, panY = 0, avatarURL, working = false, controller, generation = 0, photoRevision = 0, configured = false, drag = null;
+  let soundId = '', bitmap = null, avatar = null, zoom = 1, panX = 0, panY = 0, avatarURL, working = false, photoLoading = false, controller, generation = 0, photoRevision = 0, editRevision = 0, configured = false, drag = null;
   async function refreshSounds() {
     const sounds = await listSounds(); const selected = soundId;
     $('character-sound').replaceChildren(new Option('请选择声音', ''));
@@ -24,15 +24,15 @@ export function initCharacters({ show, notify, onSaved }) {
     else if (soundId) { soundId = ''; clearPhoto(); }
     $('character-sound-hint').hidden = sounds.length > 0; updateButtons();
   }
-  function updateButtons() { $('generate-character').disabled = !bitmap || !soundId || working || !configured; $('save-character').disabled = !bitmap || !soundId || working; $('save-character').textContent = avatar ? '保存声音形象' : '保存照片草稿'; }
+  function updateButtons() { $('generate-character').disabled = !bitmap || !soundId || working || photoLoading || !configured; $('save-character').disabled = !bitmap || !soundId || working || photoLoading; $('save-character').textContent = avatar ? '保存声音形象' : '保存照片草稿'; }
   function renderAvatar() {
     if (avatarURL) URL.revokeObjectURL(avatarURL); avatarURL = undefined;
     $('avatar-preview').hidden = !avatar; $('avatar-placeholder').hidden = !!avatar;
     if (avatar) { avatarURL = URL.createObjectURL(avatar); $('avatar-preview').src = avatarURL; }
     else $('avatar-preview').removeAttribute('src'); updateButtons();
   }
-  function clearPhoto() { bitmap?.close(); bitmap = null; avatar = null; zoom = 1; panX = panY = 0; $('photo-empty').hidden = false; $('crop-editor').hidden = true; renderAvatar(); }
-  function cropChanged() { avatar = null; photoRevision++; renderAvatar(); $('character-status').textContent = '照片已调整，可生成新形象或先保存照片草稿。'; }
+  function clearPhoto() { photoRevision++; photoLoading = false; drag = null; bitmap?.close(); bitmap = null; avatar = null; zoom = 1; panX = panY = 0; $('photo-empty').hidden = false; $('crop-editor').hidden = true; renderAvatar(); }
+  function cropChanged() { avatar = null; photoRevision++; photoLoading = false; renderAvatar(); $('character-status').textContent = '照片已调整，可生成新形象或先保存照片草稿。'; }
   function draw() {
     if (!bitmap) return; const c = $('photo-canvas'), ctx = c.getContext('2d'), scale = Math.max(512 / bitmap.width, 512 / bitmap.height) * zoom;
     const w = bitmap.width * scale, h = bitmap.height * scale;
@@ -41,29 +41,40 @@ export function initCharacters({ show, notify, onSaved }) {
   }
   async function cropBlob() { const c = document.createElement('canvas'); c.width = c.height = 256; c.getContext('2d').drawImage($('photo-canvas'), 0, 0, 256, 256); return canvasBlob(c); }
   async function setPhoto(blob) {
-    const revision = ++photoRevision;
-    const next = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-    if (next.width * next.height > 40000000) { next.close(); throw new Error('照片分辨率过大，请选择较小的照片。'); }
-    if (revision !== photoRevision) { next.close(); return; }
-    bitmap?.close(); bitmap = next; zoom = 1; panX = panY = 0; avatar = null;
-    $('photo-empty').hidden = true; $('crop-editor').hidden = false; draw(); renderAvatar();
+    const revision = ++photoRevision, selectedSound = soundId;
+    photoLoading = true; updateButtons();
+    try {
+      const next = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      if (revision !== photoRevision || selectedSound !== soundId) { next.close(); return false; }
+      if (next.width * next.height > 40000000) { next.close(); throw new Error('照片分辨率过大，请选择较小的照片。'); }
+      bitmap?.close(); bitmap = next; zoom = 1; panX = panY = 0; avatar = null;
+      $('photo-empty').hidden = true; $('crop-editor').hidden = false; draw(); renderAvatar(); return true;
+    } catch (error) {
+      if (revision !== photoRevision || selectedSound !== soundId) return false;
+      throw error;
+    } finally {
+      if (revision === photoRevision && selectedSound === soundId) { photoLoading = false; updateButtons(); }
+    }
   }
   async function editSound(sound) {
     if (working) { notify('请先等待生成结束或取消等待。'); return; }
-    show(); await refreshSounds(); soundId = sound.id; $('character-sound').value = soundId; clearPhoto();
-    try { if (sound.photo) await setPhoto(sound.photo); avatar = sound.avatar || null; renderAvatar(); $('character-status').textContent = avatar ? '已载入保存的形象，可以重新生成。' : '选一张照片，开始制作声音形象。'; } catch { notify('已保存的图片暂时无法打开，请重新选择照片。', true); }
+    const edit = ++editRevision;
+    soundId = sound.id; $('character-sound').value = soundId; clearPhoto();
+    const revision = photoRevision; show();
+    await refreshSounds(); if (edit !== editRevision || revision !== photoRevision || soundId !== sound.id) return;
+    try { if (sound.photo && !await setPhoto(sound.photo)) return; if (edit !== editRevision || soundId !== sound.id) return; avatar = sound.avatar || null; renderAvatar(); $('character-status').textContent = avatar ? '已载入保存的形象，可以重新生成。' : '选一张照片，开始制作声音形象。'; } catch { if (edit === editRevision) notify('已保存的图片暂时无法打开，请重新选择照片。', true); }
     updateButtons();
   }
-  $('character-sound').onchange = async e => { const sounds = await listSounds(), sound = sounds.find(s => s.id === e.target.value); if (sound) await editSound(sound); else { soundId = ''; clearPhoto(); } };
+  $('character-sound').onchange = async e => { const selected = e.target.value, sounds = await listSounds(); if (e.target.value !== selected) return; const sound = sounds.find(s => s.id === selected); if (sound) await editSound(sound); else { editRevision++; soundId = ''; clearPhoto(); } };
   $('take-photo').onclick = () => $('camera-file').click(); $('import-photo').onclick = () => $('photo-file').click();
   if (isStudentClient()) {
-    $('import-photo').hidden = true;
-    $('take-photo').onclick = async () => { try { const photo = await capturePhoto(); if (photo) await setPhoto(photo); } catch (error) { notify(error.message, true); } };
+    $('import-photo').hidden = !window.webkit?.messageHandlers?.localFiles;
+    $('take-photo').onclick = async () => { const selectedSound = soundId; try { const photo = await capturePhoto(); if (photo && soundId === selectedSound) await setPhoto(photo); } catch (error) { notify(error.message, true); } };
   }
   for (const id of ['camera-file', 'photo-file']) $(id).onchange = async event => {
     const file = event.target.files[0]; event.target.value = ''; if (!file) return;
     if (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { notify('请选择 10 MB 以内的 JPG、PNG 或 WebP 照片。', true); return; }
-    try { await setPhoto(file); $('character-status').textContent = '拖动照片或缩放，让你想变成角色的主体清晰可见。'; } catch (e) { notify(e.message || '照片无法读取，请换一张试试。', true); }
+    try { if (await setPhoto(file)) $('character-status').textContent = '拖动照片或缩放，让你想变成角色的主体清晰可见。'; } catch (e) { notify(e.message || '照片无法读取，请换一张试试。', true); }
   };
   for (const id of ['crop-zoom', 'crop-x', 'crop-y']) $(id).oninput = () => { zoom = Number($('crop-zoom').value); panX = Number($('crop-x').value); panY = Number($('crop-y').value); cropChanged(); draw(); };
   $('reset-crop').onclick = () => { zoom = 1; panX = panY = 0; cropChanged(); draw(); };
@@ -79,20 +90,38 @@ export function initCharacters({ show, notify, onSaved }) {
   $('photo-canvas').onpointerup = endDrag; $('photo-canvas').onpointercancel = endDrag; $('photo-canvas').onlostpointercapture = endDrag;
   function setWorking(value) { working = value; $('character-controls').inert = value; $('cancel-generation').hidden = !value; updateButtons(); }
   $('generate-character').onclick = async () => {
-    if (!bitmap || !soundId || working) return; const ticket = ++generation; controller = new AbortController(); setWorking(true); $('character-status').textContent = '正在生成动漫小伙伴…通常需要一些时间，请稍候。';
+    if (!bitmap || !soundId || working || photoLoading) return;
+    const ticket = ++generation, revision = photoRevision, selectedSound = soundId;
+    const current = () => ticket === generation && revision === photoRevision && selectedSound === soundId;
+    controller = new AbortController(); setWorking(true); $('character-status').textContent = '正在生成动漫小伙伴…通常需要一些时间，请稍候。';
     try {
       const photo = await toDataURL(await cropBlob());
+      if (!current()) return;
       const response = await classroomFetch('/api/student/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(250000)]) });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || '生成失败，请稍后重试。');
-      const image = await normalizeGeneratedImage(result.image); if (ticket !== generation) return;
+      const image = await normalizeGeneratedImage(result.image); if (!current()) return;
       avatar = image; renderAvatar(); $('character-status').textContent = '小伙伴诞生了！满意就保存，也可以再生成一个。'; $('generate-character').textContent = '重新生成形象';
-    } catch (e) { if (ticket === generation) { $('character-status').textContent = e.name === 'AbortError' ? '已取消等待，当前照片和形象保留。' : e.message || '无法连接生成服务，请检查网络。'; notify($('character-status').textContent, true); } }
+    } catch (e) { if (current()) { $('character-status').textContent = e.name === 'AbortError' ? '已取消等待，当前照片和形象保留。' : e.message || '无法连接生成服务，请检查网络。'; notify($('character-status').textContent, true); } }
     finally { if (ticket === generation) setWorking(false); }
   };
   $('cancel-generation').onclick = () => { controller?.abort(); generation++; setWorking(false); $('character-status').textContent = '已取消等待，当前照片和形象保留。生成服务可能已经处理了本次请求。'; };
   $('save-character').onclick = async () => {
-    if (!soundId || !bitmap || working) return; working = true; $('character-controls').inert = true; updateButtons();
-    try { const sound = (await listSounds()).find(s => s.id === soundId); if (!sound) throw new Error('这份声音已被删除，请重新选择。'); const photo = await cropBlob(); await saveSounds([{ ...sound, photo, avatar, imageUpdatedAt: Date.now() }]); await onSaved(); notify(avatar ? '声音形象已保存在本地作品库。' : '照片草稿已保存，可稍后继续生成形象。'); }
+    if (!soundId || !bitmap || working || photoLoading) return;
+    const selectedSound = soundId, revision = photoRevision, savedAvatar = avatar;
+    const requireCurrent = () => {
+      if (selectedSound !== soundId || revision !== photoRevision) {
+        const message = '声音或照片已更改，本次未保存，请确认后重新保存。';
+        $('character-status').textContent = message; throw new Error(message);
+      }
+    };
+    working = true; $('character-controls').inert = true; updateButtons();
+    try {
+      const sound = (await listSounds()).find(s => s.id === selectedSound); requireCurrent();
+      if (!sound) throw new Error('这份声音已被删除，请重新选择。');
+      const photo = await cropBlob(); requireCurrent();
+      await saveSounds([{ ...sound, photo, avatar: savedAvatar, imageUpdatedAt: Date.now() }]); await onSaved();
+      notify(savedAvatar ? '声音形象已保存在本地作品库。' : '照片草稿已保存，可稍后继续生成形象。');
+    }
     catch (e) { notify(e.message || '保存失败，请检查设备空间。', true); } finally { working = false; $('character-controls').inert = false; updateButtons(); }
   };
   async function checkService() {

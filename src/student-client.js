@@ -1,9 +1,12 @@
+import { installAndroidStudentBridge } from './android-student-bridge.js';
+
 export const isStudentClient = () => navigator.userAgent.includes('FreeImproStudent/');
+queueMicrotask(() => installAndroidStudentBridge());
 
 export async function exportLocalFile(blob, name) {
   if (!isStudentClient()) {
     const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = name; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 10000); return;
+    setTimeout(() => URL.revokeObjectURL(url), 10000); return true;
   }
   const files = window.FreeImproFiles;
   if (!files) throw new Error('本机文件服务不可用，请重新打开学生客户端。');
@@ -16,8 +19,10 @@ export async function exportLocalFile(blob, name) {
       const encoded = btoa(String.fromCharCode(...bytes));
       if (!await files.append(id, encoded)) throw new Error('文件保存失败，请检查剩余空间，备份最大 250 MB。');
     }
-    if (!await files.finish(id)) throw new Error('文件尚未保存成功，请重试。');
-    completed = true;
+    const finished = await files.finish(id);
+    if (finished === false && (window.FreeImproAndroid || window.webkit?.messageHandlers?.localFiles)) return false;
+    if (!finished) throw new Error('文件尚未保存成功，请重试。');
+    completed = true; return true;
   } finally {
     if (!completed) await files.cancel?.(id);
   }

@@ -1,0 +1,10 @@
+This application embeds ZXing Android Embedded 4.3.0 and ZXing Core 3.5.4.
+Both are distributed under the Apache License, Version 2.0.
+
+ZXing Android Embedded: https://github.com/journeyapps/zxing-android-embedded/tree/v4.3.0
+Upstream README copyright notice: Copyright (C) 2012-201 ZXing authors, Journey Mobile
+ZXing Core: https://github.com/zxing/zxing/tree/zxing-3.5.4
+Copyright ZXing authors.
+
+The classroom integration is original project code. It uses the embedded camera
+view and QR decoder; it does not launch an external barcode scanner application.
