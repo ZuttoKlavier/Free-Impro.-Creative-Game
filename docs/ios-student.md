@@ -70,3 +70,9 @@ xcrun swiftc -module-cache-path /private/tmp/empvc-ios-file-modules ios/LocalFil
 本轮在重新执行 `npm run prepare:ios`、将当前前端打入离线页面后，iPhone arm64 和通用 iOS Simulator 的 Debug 未签名源码构建均返回 `BUILD SUCCEEDED`。生成页面和构建产物不作为 GitHub 源码提交。模拟器构建可在前述命令中改用 `-sdk iphonesimulator -destination 'generic/platform=iOS Simulator'`，并使用单独的构建目录。
 
 仍待验收：实际系统窗口保存/取消及文件提供器权限、保存到本应用之外后的卸载重装与跨设备恢复、接近 250 MB 备份的内存和时间、不同音频编码的真实解码、真机后台与相机/麦克风权限，以及发布签名和 TestFlight。源码构建与专属检查通过不能代替这些验收。
+
+## 2026-10-09 节奏页面及模拟器互联
+
+已重新构建并在独立 iPhone 18 Pro / iOS 27 模拟器直接更新 adhoc 签名的 Debug 应用，未卸载；本地声音与已保存的 1/5/9 格节奏保留。修复横屏对话框超出 WKWebView 安全区，16 个节奏格和全部操作按钮完整显示，页首“返回声音库”已实际返回库首页。1–16 小节导航改为最多两行，竖屏保留方向提示和返回，未保存修改仍需要确认。
+
+15 项节奏与作品库相关浏览器检查通过，教师网页与真实原生接口互联使用独立测试课堂。详细流程、键盘边界和结果见 [互联记录](teacher-student-interconnection.md)。这次模拟器可安装更新不等于 iPhone 发布签名、TestFlight 或真机验收。

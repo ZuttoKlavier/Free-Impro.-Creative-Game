@@ -35,7 +35,10 @@ test('bundled iOS app records, saves and reopens offline without requesting any 
   await page.locator('#library-tab').click();
   const button = await page.locator('#studio-tab').boundingBox();
   await page.mouse.move(button.x + button.width / 2, button.y + button.height / 2); await page.mouse.down();
-  await expect(page.locator('#capture-overlay')).toBeVisible(); await page.waitForTimeout(750); await page.mouse.up();
+  await expect(page.locator('#capture-overlay')).toBeVisible();
+  // The overlay also covers permission setup; measure the held recording only after capture starts.
+  await expect(page.locator('#studio-tab')).toHaveClass(/recording/);
+  await page.waitForTimeout(750); await page.mouse.up();
   await expect(page.locator('#editor')).toBeVisible();
   await page.locator('#sound-name').fill('离线录音'); await page.locator('#save').click();
   await expect(page.locator('#library-count')).toHaveText('1'); await page.locator('#library-tab').click();

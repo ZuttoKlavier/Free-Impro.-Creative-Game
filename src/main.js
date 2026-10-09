@@ -104,7 +104,7 @@ function setView(view) { if (view === 'studio' && !source) view = 'library'; if 
 $('studio-tab').onclick = () => notify('长按录音，松开完成；最长 15 秒。'); $('library-tab').onclick = () => setView('library');
 const classroom = initClassroom({ notify, show: () => setView('classroom'), stopPlayback });
 const characters = initCharacters({ notify, show: () => setView('characters'), onSaved: refreshLibrary });
-const studentRhythm = createStudentRhythm({ notify, stopPlayback, onSaved: refreshLibrary });
+const studentRhythm = createStudentRhythm({ notify, stopPlayback, onSaved: refreshLibrary, onClosed: () => setView('library') });
 $('characters-tab').onclick = () => { setView('characters'); characters.refresh(); };
 $('classroom-tab').onclick = () => { setView('classroom'); classroom.refresh(); };
 if (window.webkit?.messageHandlers?.localFiles) {

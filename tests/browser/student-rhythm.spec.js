@@ -36,6 +36,7 @@ test('phone rhythm editor persists a draft and preserves it through backup resto
   await page.locator('.sound-open').click(); await page.getByRole('button', { name: '节奏编创', exact: true }).click();
   await expect(page.locator('.rhythm-rotate')).toBeVisible();
   await expect(page.locator('.rhythm-landscape-content')).toBeHidden();
+  await expect(page.getByRole('button', { name: '返回声音库', exact: true })).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.locator('.rhythm-rotate')).toBeHidden();
   const start = await page.getByRole('button', { name: '第 1 小节第 1 格', exact: true }).boundingBox();
@@ -52,7 +53,7 @@ test('phone rhythm editor persists a draft and preserves it through backup resto
   await page.getByRole('button', { name: '停止', exact: true }).click();
   await page.getByRole('button', { name: '保存节奏', exact: true }).click();
   await expect(page.locator('.student-rhythm [data-status]')).toContainText('节奏已保存');
-  await page.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '返回声音库', exact: true }).click();
   const download = page.waitForEvent('download'); await page.locator('#export').click(); const backup = await (await download).path();
   await page.locator('.sound-open').click(); await page.getByRole('button', { name: '删除声音', exact: true }).click(); await page.locator('#delete-dialog').getByRole('button', { name: '删除声音', exact: true }).click();
   await expect(page.locator('#library-count')).toHaveText('0'); await page.locator('#backup-file').setInputFiles(backup);
@@ -61,4 +62,33 @@ test('phone rhythm editor persists a draft and preserves it through backup resto
   await expect(page.getByRole('button', { name: '第 1 小节第 1 格', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.locator('.student-rhythm').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await expect(page.locator('.student-rhythm .held')).toHaveCount(4);
+});
+
+test('return to the sound library stays available in portrait and keeps the unsaved-change confirmation', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/'); await page.locator('#demo').click();
+  await page.locator('#sound-name').fill('返回测试'); await page.locator('#save').click();
+  await expect(page.locator('#library-count')).toHaveText('1'); await page.locator('#library-tab').click();
+  await page.locator('.sound-open').click(); await page.getByRole('button', { name: '节奏编创', exact: true }).click();
+  const back = page.getByRole('button', { name: '返回声音库', exact: true });
+  await back.click(); await expect(page.locator('.student-rhythm')).toBeHidden();
+  await expect(page.locator('#library-view')).toBeVisible(); await page.locator('.sound-open').click();
+  await page.getByRole('button', { name: '节奏编创', exact: true }).click();
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.getByRole('button', { name: '第 1 小节第 1 格', exact: true }).click();
+  await page.getByRole('button', { name: '播放试听', exact: true }).click();
+  await expect.poll(() => page.locator('.student-rhythm progress').evaluate(el => el.value)).toBeGreaterThan(0);
+  page.once('dialog', dialog => dialog.dismiss()); await back.click();
+  await expect(page.locator('.student-rhythm')).toBeVisible();
+  await expect(page.getByRole('button', { name: '第 1 小节第 1 格', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.rhythm-rotate')).toBeVisible();
+  await expect(page.locator('.student-rhythm progress')).toHaveAttribute('value', '0');
+  page.once('dialog', dialog => dialog.accept()); await back.click();
+  await expect(page.locator('.student-rhythm')).toBeHidden();
+  await expect(page.locator('#library-view')).toBeVisible();
+  await page.locator('.sound-open').click();
+  await page.getByRole('button', { name: '节奏编创', exact: true }).click();
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.getByRole('button', { name: '第 1 小节第 1 格', exact: true })).toHaveAttribute('aria-pressed', 'false');
 });

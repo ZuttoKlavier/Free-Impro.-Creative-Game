@@ -3,19 +3,20 @@ import { Sequencer } from './sequencer.js';
 import { validateRhythm, resizeSteps } from './rhythm-data.js';
 import './student-rhythm.css';
 
-export function createStudentRhythm({ notify, stopPlayback, onSaved }) {
+export function createStudentRhythm({ notify, stopPlayback, onSaved, onClosed }) {
   const dialog = document.createElement('dialog'); dialog.className = 'student-rhythm';
-  dialog.innerHTML = `<h2>节奏编创</h2><p data-name></p><p>每小节 16 个位置 · 点击圆点发声，向右拖动延长；向左收回缩短。延长只发声一次，保持原音高；大幅拉伸可能影响音色。</p>
-    <div class="rhythm-controls"><label>小节数 <input data-bars aria-label="编创小节数" type="number" min="1" max="16" value="1"></label>
-    <label>试听速度 <input data-bpm aria-label="试听速度" type="number" min="40" max="240" value="100"></label></div>
-    <div data-pages class="rhythm-pages"></div><div class="rhythm-water-stage"><svg class="rhythm-water" aria-hidden="true"><defs><filter id="rhythm-water-merge" x="-30%" y="-100%" width="160%" height="300%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -8"/></filter></defs><g data-water-shapes></g></svg><div data-grid class="student-rhythm-grid" aria-label="学生节奏格子"></div></div>
-    <div class="dialog-actions"><button data-copy class="secondary">复制到下一小节</button><button data-clear class="secondary">清空本小节</button></div>
-    <progress data-progress max="1" value="0" aria-label="试听循环进度"></progress>
-    <div class="dialog-actions"><button data-play class="secondary">播放试听</button><button data-stop class="secondary">停止</button><button data-save class="primary">保存节奏</button><button data-close class="secondary">关闭</button></div>
-    <p data-status role="status">保存到当前声音作品；课堂内另行提交，教师接受后使用。</p>`;
-  const content = document.createElement('div'); content.className = 'rhythm-landscape-content';
-  while (dialog.firstChild) content.append(dialog.firstChild); dialog.append(content);
-  const rotate = document.createElement('div'); rotate.className = 'rhythm-rotate'; rotate.innerHTML = '<span aria-hidden="true">↻</span><h2>请横屏使用</h2><p>将设备旋转为横屏后，即可编创节奏。</p><button class="secondary" data-rotate-close>返回</button>'; dialog.append(rotate);
+  dialog.innerHTML = `<div class="rhythm-landscape-content">
+    <div class="rhythm-setup"><div class="rhythm-controls"><label>小节数 <input data-bars aria-label="编创小节数" type="number" inputmode="numeric" min="1" max="16" value="1"></label>
+    <label>试听速度 <input data-bpm aria-label="试听速度" type="number" inputmode="numeric" min="40" max="240" value="100"></label></div>
+    <nav data-pages class="rhythm-pages" aria-label="选择编创小节"></nav></div>
+    <div class="rhythm-water-stage"><svg class="rhythm-water" aria-hidden="true"><defs><filter id="rhythm-water-merge" x="-30%" y="-100%" width="160%" height="300%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/><feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -8"/></filter></defs><g data-water-shapes></g></svg><div data-grid class="student-rhythm-grid" aria-label="学生节奏格子"></div></div>
+    <div class="rhythm-actions"><button data-copy class="secondary">复制到下一小节</button><button data-clear class="secondary">清空本小节</button><button data-play class="secondary">播放试听</button><button data-stop class="secondary">停止</button><button data-save class="primary">保存节奏</button></div>
+    <div class="rhythm-feedback"><progress data-progress max="1" value="0" aria-label="试听循环进度"></progress><p data-status role="status"></p></div>
+  </div>`;
+  const heading = document.createElement('div'); heading.className = 'student-rhythm-heading';
+  heading.innerHTML = '<div><h2>节奏编创</h2><p data-name></p></div><button data-close class="secondary" aria-label="返回声音库">‹ 返回声音库</button>'; dialog.prepend(heading);
+  const content = dialog.querySelector('.rhythm-landscape-content');
+  const rotate = document.createElement('div'); rotate.className = 'rhythm-rotate'; rotate.innerHTML = '<span aria-hidden="true">↻</span><h2>请横屏使用</h2><p>将设备旋转为横屏后，即可编创节奏。</p>'; dialog.append(rotate);
   document.body.append(dialog);
   const $ = selector => dialog.querySelector(selector);
   let soundId, draft, page = 0, engine = null, generation = 0, dirty = false, saving = false, gesture = null;
@@ -23,7 +24,7 @@ export function createStudentRhythm({ notify, stopPlayback, onSaved }) {
   const edited = () => { dirty = true; engine?.setPattern('self', draft.steps); $('[data-status]').textContent = '尚未保存；播放中的格子修改下一遍生效。'; };
   function draw() {
     $('[data-pages]').replaceChildren(...Array.from({ length: draft.bars }, (_, i) => {
-      const button = document.createElement('button'); button.textContent = `第 ${i + 1} 小节`; button.className = 'secondary'; button.setAttribute('aria-pressed', String(i === page));
+      const button = document.createElement('button'); button.textContent = String(i + 1); button.setAttribute('aria-label', `第 ${i + 1} 小节`); button.className = 'secondary'; button.setAttribute('aria-pressed', String(i === page));
       button.onclick = () => { page = i; draw(); }; return button;
     }));
     $('[data-grid]').replaceChildren(...Array.from({ length: 16 }, (_, i) => {
@@ -136,16 +137,26 @@ export function createStudentRhythm({ notify, stopPlayback, onSaved }) {
     } catch (e) { notify(e.message, true); } finally { saving = false; $('[data-save]').disabled = false; }
   };
   function orientationChanged() {
+    fitViewport();
     const landscape = matchMedia('(orientation: landscape)').matches;
     content.hidden = !landscape; content.inert = !landscape; rotate.hidden = landscape;
     if (!landscape) { stop(); if (gesture) { draft.steps = gesture.original; gesture = null; if (draft) draw(); } } else if (dialog.open) requestAnimationFrame(paintWater);
   }
   window.addEventListener('resize', orientationChanged);
   matchMedia('(orientation: landscape)').addEventListener('change', orientationChanged);
-  $('[data-rotate-close]').onclick = () => close();
-  function close() { if (saving) return; if (dirty && !confirm('节奏尚未保存，放弃本次修改？')) return; dialog.close(); }
+  function fitViewport() {
+    const viewport = window.visualViewport;
+    const height = viewport?.height || window.innerHeight;
+    dialog.style.setProperty('--rhythm-viewport-height', `${height}px`);
+    dialog.style.setProperty('--rhythm-viewport-top', `${viewport?.offsetTop || 0}px`);
+    dialog.classList.toggle('rhythm-compact', height < 280);
+    dialog.classList.toggle('rhythm-tight', height < 190);
+  }
+  window.visualViewport?.addEventListener('resize', fitViewport);
+  window.visualViewport?.addEventListener('scroll', fitViewport);
+  function close() { if (saving) return; if (dirty && !confirm('节奏尚未保存，放弃本次修改？')) return; dialog.close(); onClosed?.(); }
   $('[data-close]').onclick = close; dialog.oncancel = event => { event.preventDefault(); close(); }; dialog.onclose = stop;
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
   window.addEventListener('freeimpro-background', stop); window.addEventListener('pagehide', stop);
-  return { edit(sound) { stopPlayback(); stop(); soundId = sound.id; draft = sound.rhythm ? validateRhythm(sound.rhythm) : { bars: 1, steps: Array(16).fill(false) }; page = 0; dirty = false; $('[data-name]').textContent = sound.name; $('[data-bars]').value = draft.bars; $('[data-status]').textContent = '保存到当前声音作品；课堂内另行提交，教师接受后使用。'; draw(); dialog.showModal(); orientationChanged(); } };
+  return { edit(sound) { stopPlayback(); stop(); soundId = sound.id; draft = sound.rhythm ? validateRhythm(sound.rhythm) : { bars: 1, steps: Array(16).fill(false) }; page = 0; dirty = false; $('[data-name]').textContent = sound.name; $('[data-bars]').value = draft.bars; $('[data-status]').textContent = '点击圆点发声，向右拖动延长；保存后到“我的”提交。'; draw(); dialog.showModal(); orientationChanged(); } };
 }
