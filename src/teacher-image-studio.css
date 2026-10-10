@@ -1,0 +1,15 @@
+#teacher-image-settings { width: min(900px, calc(100vw - 32px)); max-height: 88vh; overflow: auto; }
+.image-settings-heading, .image-settings-actions, .image-request-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.image-settings-heading { justify-content: space-between; }
+.image-settings-actions a { text-decoration: none; }
+.image-request { padding: 16px 0; border-bottom: 1px solid #ddd; }
+.image-request h3 { margin: 4px 0; }
+.image-request textarea { width: 100%; margin-top: 12px; }
+.image-upload { cursor: pointer; }
+.image-references { display: flex; flex-wrap: wrap; gap: 20px; }
+.image-references a { display: flex; flex-direction: column; gap: 8px; }
+.image-references img { width: 128px; height: 128px; object-fit: contain; background: #f5f5f5; }
+#teacher-image-settings details { margin-top: 20px; }
+#teacher-image-settings code { overflow-wrap: anywhere; }
+.image-conversation-binding { display: grid; gap: 12px; margin: 16px 0; }
+.image-conversation-binding input[type="url"] { display: block; width: 100%; }

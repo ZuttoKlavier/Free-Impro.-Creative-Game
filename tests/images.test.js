@@ -45,7 +45,7 @@ test('generation requires login; submitted images obey classroom access and stay
     const student = client(), teacher = client(), other = client();
     assert.equal((await student('/characters', { photo: image })).status, 401);
     for (const [c, username, role] of [[student, 'student', 'student'], [teacher, 'teacher', 'teacher'], [other, 'other', 'student']]) await c('/register', { username, role, name: username, password: 'password123' });
-    assert.equal((await student('/characters', { photo: image })).data.image, image);
+    assert.equal((await student('/characters', { photo: image })).status, 410, 'Old direct generation cannot bypass the registered daily queue');
     const room = (await teacher('/classrooms', { name: '带图课堂', capacity: 15, background: '教室' })).data.classroom;
     await student('/join', { code: room.code }); await other('/join', { code: room.code });
     const audio = Buffer.from(await encodeWav(new Float32Array(2400), 24000).arrayBuffer()).toString('base64');

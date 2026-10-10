@@ -40,7 +40,7 @@ export async function startLanServer({ certDirectory = 'data/https', distDirecto
     let url;
     try { url = new URL(req.url, `${secure ? 'https' : 'http'}://${req.headers.host}`); } catch { send(400, '无效地址'); return; }
     if (!config.hosts.includes(url.hostname.replace(/^\[|\]$/g, ''))) { send(421, '请使用启动终端提供的课堂地址。'); return; }
-    if (secure && url.pathname.startsWith('/api/')) { api(req, res); return; }
+    if (secure && (url.pathname.startsWith('/api/') || url.pathname === '/mcp/images')) { api(req, res); return; }
     if (!['GET', 'HEAD'].includes(req.method)) { send(405, '不支持的操作'); return; }
     if (url.pathname === '/connection/ca.crt') { res.setHeader('Content-Disposition', 'attachment; filename="classroom-ca.crt"'); send(200, ca, 'application/x-x509-ca-cert'); return; }
     if (url.pathname === '/connection' || (!secure && url.pathname === '/')) { send(200, secure ? securePage : setupPage, 'text/html; charset=utf-8'); return; }

@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listSounds, saveSounds, importSounds, deleteSound, outbox, closeStore } from '../src/storage.js';
+import { listSounds, saveSounds, importSounds, deleteSound, outbox, closeStore, updateSound, attachImageResult } from '../src/storage.js';
 
 const NAME = 'free-impro-student';
 const raw = version => new Promise((resolve, reject) => { const request = indexedDB.open(NAME, version); request.onerror = () => reject(request.error); request.onsuccess = () => resolve(request.result); });
@@ -33,6 +33,16 @@ test('concurrent backup transactions skip duplicate IDs without replacing the fi
   await assert.rejects(importSounds([{ id: 'would-add' }, { name: 'missing id' }]));
   assert.deepEqual((await listSounds()).map(s => s.id), ['import-race']);
   await deleteSound('import-race');
+});
+test('late generated images preserve current audio and rhythm and never restore deleted or replaced works', async t => {
+  t.after(closeStore);
+  await saveSounds([{ id: 'late-image', name: 'original', blob: new Blob(['audio']), rhythm: { steps: [1] }, imageRequest: { id: 'job', userId: 'student' } }]);
+  await updateSound('late-image', latest => ({ ...latest, name: 'renamed', rhythm: { steps: [0, 1] } }));
+  assert.equal(await attachImageResult('late-image', 'other-job', 'student', new Blob(['bad'])), false);
+  assert.equal(await attachImageResult('late-image', 'job', 'other-student', new Blob(['bad'])), false);
+  assert.equal(await attachImageResult('late-image', 'job', 'student', new Blob(['image'])), true);
+  const [sound] = await listSounds(); assert.equal(sound.name, 'renamed'); assert.deepEqual(sound.rhythm.steps, [0, 1]); assert.equal(await sound.blob.text(), 'audio'); assert.equal(await sound.avatar.text(), 'image');
+  await deleteSound('late-image'); assert.equal(await attachImageResult('late-image', 'job', 'student', new Blob(['image'])), false); assert.equal((await listSounds()).length, 0);
 });
 test('capacity and bulk errors roll back atomically; concurrent writes cannot exceed 200', async t => {
   t.after(closeStore);

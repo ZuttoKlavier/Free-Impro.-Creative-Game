@@ -46,6 +46,20 @@ export async function deleteSound(id) {
   await db.table('sounds').delete(id);
 }
 
+// Image jobs may finish after the student renames, edits, or deletes a work.
+// Always update the current row atomically and never recreate a deleted sound.
+export async function updateSound(id, change) {
+  const db = await openStore(), sounds = db.table('sounds');
+  return db.transaction('rw', sounds, async () => {
+    const current = await sounds.get(id); if (!current) return false;
+    const next = change(current); if (!next) return false;
+    await sounds.put(next); return true;
+  });
+}
+export async function attachImageResult(id, jobId, userId, avatar) {
+  return updateSound(id, current => current.imageRequest?.id === jobId && current.imageRequest?.userId === userId ? { ...current, avatar, imageRequest: null, imageUpdatedAt: Date.now() } : null);
+}
+
 export async function outbox(action, value) {
   const db = await openStore(), table = db.table('outbox');
   if (action === 'list') return table.toArray();

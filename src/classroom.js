@@ -79,6 +79,7 @@ export function initClassroom({ notify, show, stopPlayback }) {
     };
     if ($('join-form')) $('join-form').hidden = user?.role !== 'student'; if ($('create-form')) $('create-form').hidden = user?.role !== 'teacher';
     $('connection-note').hidden = online; $('connection-note').textContent = '连接中断 · 以下为上次保存的课堂记录。可以继续创作并排队提交，恢复连接后发送。';
+    if (clientRole === 'student') window.dispatchEvent(new CustomEvent('freeimpro-student-session', { detail: { user: online && canUseClassroom() ? user : null } }));
   }
   $('auth-form').onsubmit = async event => {
     event.preventDefault(); $('auth-submit').disabled = true; $('auth-error').textContent = '';

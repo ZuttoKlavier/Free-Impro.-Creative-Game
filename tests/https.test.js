@@ -54,6 +54,7 @@ test('production HTTPS verifies its certificate, serves only build files, and ke
   assert.match((await getHTTPS(origin, '/assets/app-123.js')).headers['cache-control'], /immutable/);
   for (const path of ['/.env', '/server.key', '/data/classroom.sqlite', '/connection/classroom-ca.key', '/%2e%2e/data/https/server.key', '/src/main.js', '/leaked.js']) assert.equal((await getHTTPS(origin, path)).status, 404, path);
   const me = await getHTTPS(origin, '/api/me'); assert.equal(me.status, 401); assert.match(me.headers['content-type'], /application\/json/);
+  const mcp = await getHTTPS(origin, '/mcp/images', { method: 'POST', body: '{}' }); assert.equal(mcp.status, 401); assert.match(mcp.headers['content-type'], /application\/json/);
   assert.equal((await getHTTPS(origin, '/', { servername: 'localhost', headers: { Host: 'unrelated.example' } })).status, 421);
   assert.equal((await getHTTPS(origin, '/', { method: 'POST' })).status, 405);
 });

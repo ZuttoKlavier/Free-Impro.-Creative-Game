@@ -76,3 +76,10 @@ xcrun swiftc -module-cache-path /private/tmp/empvc-ios-file-modules ios/LocalFil
 已重新构建并在独立 iPhone 18 Pro / iOS 27 模拟器直接更新 adhoc 签名的 Debug 应用，未卸载；本地声音与已保存的 1/5/9 格节奏保留。修复横屏对话框超出 WKWebView 安全区，16 个节奏格和全部操作按钮完整显示，页首“返回声音库”已实际返回库首页。1–16 小节导航改为最多两行，竖屏保留方向提示和返回，未保存修改仍需要确认。
 
 15 项节奏与作品库相关浏览器检查通过，教师网页与真实原生接口互联使用独立测试课堂。详细流程、键盘边界和结果见 [互联记录](teacher-student-interconnection.md)。这次模拟器可安装更新不等于 iPhone 发布签名、TestFlight 或真机验收。
+
+
+## 2026-10-10 生图申请兼容更新
+
+离线学生页面已加入注册生图资料、固定形象与作品配图申请。原生请求白名单只增加学生图片申请、结果及固定形象接口，仍不允许教师页面、外部 ChatGPT 网页或 MCP 路由。启动保持离线，主动连接课堂后才同步图片。
+
+重新生成当前离线页面后，通用 iOS Simulator Debug 未签名源码构建通过；本轮未安装新应用，未验收真机或 TestFlight。生图规则与教师回传步骤见 [生图流程说明](image-workflow.md)。

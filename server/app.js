@@ -4,7 +4,9 @@ import { randomBytes, randomUUID, randomInt, scrypt, timingSafeEqual, createHash
 import { promisify } from 'node:util';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { createImageGenerator, validateImage } from './images.js';
+import { validateImage } from './images.js';
+import { createImageWorkflow } from './image-workflow.js';
+import { serveImageMcp } from './image-mcp.js';
 import { createLayoutStore } from './layout.js';
 import { createArrangementStore } from './arrangement.js';
 import { createPerformanceStore } from './performance.js';
@@ -25,7 +27,7 @@ export function validateWav(encoded) {
   return { audio, duration: length / (rate * 2) };
 }
 
-export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, imageGenerator = createImageGenerator(), performanceNow = Date.now } = {}) {
+export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, performanceNow = Date.now, imageNow = Date.now } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -43,7 +45,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   const layout = createLayoutStore(db);
   const arrangement = createArrangementStore(db);
   const performance = createPerformanceStore(db, performanceNow);
-  const imageRequests = new Set(), imageLimits = new Map();
+  const images = createImageWorkflow(db, imageNow);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -76,6 +78,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     try {
       const incomingPath = new URL(req.url, 'http://local').pathname;
+      if (incomingPath === '/mcp/images') { await serveImageMcp(req, res, images); return; }
       req.clientRole = /^\/api\/(student|teacher)\//.exec(incomingPath)?.[1];
       const path = req.clientRole ? incomingPath.replace('/api/' + req.clientRole + '/', '/api/') : incomingPath;
       const studentClient = (req.headers['user-agent'] || '').includes('FreeImproStudent/');
@@ -83,7 +86,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
       const requiredRole = studentClient ? 'student' : teacherClient ? 'teacher' : req.clientRole;
       if (req.clientRole && requiredRole !== req.clientRole) throw error(403, '请使用对应身份的独立客户端。');
       if (req.method === 'GET' && path === '/api/health') { send(200, { ok: true }); return; }
-      if (req.method === 'GET' && path === '/api/image-status') { send(200, { configured: imageGenerator.configured }); return; }
+      if (req.method === 'GET' && path === '/api/image-status') { send(200, images.status(session(req).user)); return; }
       if (!['GET', 'POST'].includes(req.method)) throw error(405, '不支持的操作。');
       if (req.method === 'POST') {
         let origin;
@@ -149,20 +152,23 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
       const { token, user } = session(req); if (!user) throw error(401, '请先登录，或重新登录以恢复连接。');
       if (requiredRole && user.role !== requiredRole) throw error(403, '账号身份与当前客户端不符，请重新登录。');
       if (req.method === 'POST' && path === '/api/characters') {
-        if (!imageGenerator.configured) throw error(503, '图像生成尚未配置，请让教师在服务器设置 OpenAI API 密钥。照片仍可保存在本地。');
-        const now = Date.now();
-        for (const [id, history] of imageLimits) { const recent = history.filter(t => now - t < 3600000); if (recent.length) imageLimits.set(id, recent); else imageLimits.delete(id); }
-        const history = imageLimits.get(user.id) || [];
-        if (history.length >= 10) throw error(429, '本小时生成次数已用完，请稍后再来。');
-        if (imageRequests.has(user.id) || imageRequests.size >= 3) throw error(429, '正在生成其他形象，请稍后重试。');
-        const data = await body(req); validateImage(data.photo);
-        if (imageRequests.has(user.id) || imageRequests.size >= 3) throw error(429, '正在生成其他形象，请稍后重试。');
-        imageRequests.add(user.id); imageLimits.set(user.id, [...history, now]);
-        const controller = new AbortController();
-        const cancel = () => { if (!res.writableEnded) controller.abort(); }; res.on('close', cancel);
-        try { const result = await imageGenerator.generate(data.photo, AbortSignal.any([controller.signal, AbortSignal.timeout(240000)])); send(200, result); }
-        finally { imageRequests.delete(user.id); res.off('close', cancel); }
-        return;
+        throw error(410, '请更新客户端，从形象页面提交图片申请。');
+      }
+      if (req.method === 'POST' && path === '/api/image-profile/register') { send(200, images.register(user)); return; }
+      if (req.method === 'GET' && path === '/api/image-profile/avatar') { const bytes = images.avatar(user); res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(bytes); return; }
+      if (path === '/api/image-jobs') {
+        if (req.method === 'GET') { send(200, { jobs: images.list(user) }); return; }
+        if (req.method === 'POST') { send(201, { job: images.request(user, await body(req)) }); return; }
+        throw error(405, '不支持的申请操作。');
+      }
+      if (req.method === 'POST' && path === '/api/image-mcp-token') { send(201, images.issueToken(user)); return; }
+      const imageJob = /^\/api\/image-jobs\/([a-f0-9-]{36})\/(photo|reference|result|context|claim|complete|reject|conversation)$/.exec(path);
+      if (imageJob) {
+        const [, id, action] = imageJob;
+        if (req.method === 'GET' && ['photo', 'reference', 'result'].includes(action)) { const bytes = images.asset(user, id, action); res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(bytes); return; }
+        if (req.method === 'GET' && action === 'context') { send(200, images.context(user, id)); return; }
+        if (req.method === 'POST' && action === 'conversation') { send(200, { job: images.bindConversation(user, id, await body(req)) }); return; }
+        if (req.method === 'POST' && ['claim', 'complete', 'reject'].includes(action)) { const data = await body(req); const job = action === 'claim' ? images.claim(user, id, data.claimId) : action === 'complete' ? images.finish(user, id, data) : images.reject(user, id); send(200, { job }); return; }
       }
       if (req.method === 'GET' && path === '/api/me') { send(200, { user: publicUser(user) }); return; }
       if (req.method === 'POST' && path === '/api/logout') { run('DELETE FROM sessions WHERE token=?', token); res.setHeader('Set-Cookie', `${cookieName(req.clientRole)}=; HttpOnly; SameSite=Strict; Path=${req.clientRole ? '/api/' + req.clientRole : '/'}; Max-Age=0${secureCookies ? '; Secure' : ''}`); send(200, { ok: true }); return; }

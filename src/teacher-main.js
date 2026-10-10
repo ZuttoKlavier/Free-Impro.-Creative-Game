@@ -1,6 +1,7 @@
 import './style.css';
 import { initClassroom } from './classroom.js';
 import { initOffline } from './offline.js';
+import { initTeacherImages } from './teacher-image-studio.js';
 
 document.querySelector('#app').innerHTML = `
 <header><div class="brand"><span class="brand-icon">♫</span><span>Free Impro<small>教师工作台</small></span></div><div class="header-right"><span class="local-dot"></span>教师端<button id="account-shortcut" class="student-tag">教师登录</button></div></header>
@@ -17,3 +18,4 @@ const classroom = initClassroom({ notify, show() {}, stopPlayback() { document.q
 document.querySelector('#classroom-tab').onclick = () => classroom.refresh();
 document.querySelector('#account-shortcut').onclick = () => document.querySelector('#classroom-view').scrollIntoView({ behavior: 'smooth' });
 initOffline();
+initTeacherImages({ notify });

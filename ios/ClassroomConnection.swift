@@ -40,10 +40,10 @@ final class ClassroomConnection: NSObject, URLSessionDelegate, URLSessionTaskDel
         logoutTask = session.dataTask(with: request) { _, _, _ in }; logoutTask?.resume()
     }
     private func allowed(_ path: String, _ method: String) -> Bool {
-        if method == "GET" && ["/api/student/me", "/api/student/classrooms", "/api/student/image-status"].contains(path) { return true }
-        if method == "POST" && ["/api/student/enter-classroom", "/api/student/join", "/api/student/logout", "/api/student/characters"].contains(path) { return true }
+        if method == "GET" && ["/api/student/me", "/api/student/classrooms", "/api/student/image-status", "/api/student/image-jobs", "/api/student/image-profile/avatar"].contains(path) { return true }
+        if method == "POST" && ["/api/student/enter-classroom", "/api/student/join", "/api/student/logout", "/api/student/characters", "/api/student/image-jobs", "/api/student/image-profile/register"].contains(path) { return true }
         let id = "[A-Za-z0-9-]{1,100}"
-        let pattern = method == "GET" ? "^/api/student/(classrooms/\(id)|submissions/\(id)/(audio|image))$" : "^/api/student/classrooms/\(id)/(submit|rhythm-request)$"
+        let pattern = method == "GET" ? "^/api/student/(classrooms/\(id)|submissions/\(id)/(audio|image)|image-jobs/\(id)/result)$" : "^/api/student/classrooms/\(id)/(submit|rhythm-request)$"
         return ["GET", "POST"].contains(method) && path.range(of: pattern, options: .regularExpression) != nil
     }
     func request(_ body: [String: Any], cookieStore: WKHTTPCookieStore, reply: @escaping (Any?, String?) -> Void) {

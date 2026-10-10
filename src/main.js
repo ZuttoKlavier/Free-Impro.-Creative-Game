@@ -4,6 +4,7 @@ import './student-shell.css';
 import { initOffline } from './offline.js';
 import { initClassroom } from './classroom.js';
 import { initCharacters } from './characters.js';
+import { initStudentImages } from './student-image-account.js';
 import { imageFromDataURL } from './images.js';
 import { detectSlices, mono, trimSamples, encodeWav, demoAudio, MAX_RECORDING } from './audio.js';
 import { listSounds, saveSounds, importSounds, deleteSound, LIMIT } from './storage.js';
@@ -103,7 +104,9 @@ function setCaptureBusy(value) { busy = value; $('editor').inert = value; ['reco
 function setView(view) { if (view === 'studio' && !source) view = 'library'; if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); closeSoundPage(); ['studio', 'library', 'characters', 'classroom'].forEach(v => { $(v + '-view').hidden = v !== view; const selected = v === view || (v === 'library' && view === 'characters'); $(v + '-tab').classList.toggle('active', selected); $(v + '-tab').setAttribute('aria-current', selected ? 'page' : 'false'); }); $('my-view').hidden = view !== 'classroom'; document.querySelector('.intro').hidden = true; window.scrollTo({ top: 0, behavior: 'instant' }); }
 $('studio-tab').onclick = () => notify('长按录音，松开完成；最长 15 秒。'); $('library-tab').onclick = () => setView('library');
 const classroom = initClassroom({ notify, show: () => setView('classroom'), stopPlayback });
-const characters = initCharacters({ notify, show: () => setView('characters'), onSaved: refreshLibrary });
+let studentImages;
+const characters = initCharacters({ notify, show: () => setView('characters'), onSaved: refreshLibrary, imageWorkflow: () => studentImages });
+studentImages = initStudentImages({ notify, onSaved: refreshLibrary, editIdentity: () => characters.editIdentity() });
 const studentRhythm = createStudentRhythm({ notify, stopPlayback, onSaved: refreshLibrary, onClosed: () => setView('library') });
 $('characters-tab').onclick = () => { setView('characters'); characters.refresh(); };
 $('classroom-tab').onclick = () => { setView('classroom'); classroom.refresh(); };
