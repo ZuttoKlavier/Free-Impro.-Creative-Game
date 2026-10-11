@@ -10,6 +10,7 @@
     "mcp:images": "node scripts/image-mcp.js",
     "mcp:images:check": "node scripts/image-mcp.js --check",
     "mcp:images:configure": "node scripts/image-mcp.js --configure",
+    "mcp:images:configure-runtime": "node scripts/image-mcp.js --configure-runtime-key",
     "prepare:ios": "node scripts/prepare-ios.js",
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",

@@ -33,7 +33,17 @@ npm run mcp:images:check
 
 使用 [官方最新发布](https://github.com/openai/tunnel-client/releases/latest)，验证下载文件的校验值。本机已下载 v0.0.16 的 macOS arm64 客户端，并核对 GitHub asset digest 与 SHA256SUMS；这是 2026-10-11 的本地验证记录，不是其他机器的固定版本要求。客户端位于本机忽略目录 `data/tools/tunnel-client/v0.0.16/`，未上传 Git。
 
-将 runtime key 保存为仅本人可读的本机文件，在初始化中使用 `file:/绝对路径` 引用。以下命令中的隧道 ID、Node 路径、项目路径和密钥文件都必须替换为本机真实值：
+在 [Platform API keys](https://platform.openai.com/settings/organization/api-keys) 创建用于隧道运行的受限密钥，只启用 Tunnels Read + Use。首次验证可设置七天有效期；其他 API 权限保持关闭。不要使用组织 Admin API key，也不要把密钥发送到聊天。
+
+在本机项目目录运行以下命令，隐藏录入 runtime key：
+
+```sh
+npm run mcp:images:configure-runtime
+```
+
+此入口不加载 `.env`、不读取课堂数据库或其他密钥，只检查输入格式，并原子保存到固定的 `data/image-mcp/runtime-key`。目录权限为 700、文件为 600；拒绝符号链接，取消、关闭输入或无效输入保留旧配置。保存成功不代表已获得隧道授权，仍需官方客户端验证。Windows 需另行配置当前运行账号的目录及文件 ACL。
+
+初始化时使用 `file:/绝对路径` 引用该文件。以下命令中的隧道 ID、Node 路径、项目路径和密钥文件都必须替换为本机真实值：
 
 ```sh
 tunnel-client init \
@@ -68,12 +78,16 @@ tunnel-client run --profile ev-teacher-images --profile-dir /绝对路径/EMPVC/
 
 88 项 Node 单元/接口测试、2 项 Chrome 生图浏览器测试及生产网页构建通过。真实临时 HTTP 与 stdio MCP 客户端验证了六个工具、申请领取、材料读取、对话绑定、合成图片回传、权限隔离、连接记录、令牌轮换/过期与会话内撤销。浏览器验证了自动接收、输入保留、工具状态更新及登录失效后的材料清理。
 
-本机当前尚无真实教师桥接凭证、Platform 隧道 ID 或 runtime key。没有创建远端隧道、完成 ChatGPT 插件授权或启动无人值守生图。Platform 的首次自动登录返回认证错误，需账户所有者恢复登录后继续配置；不得以本地测试通过代替真实接通。
+新增运行密钥录入入口的八项定向测试通过，覆盖隐藏输入、文件权限、原子替换、符号链接拒绝、取消和关闭输入、无效输入与命令行参数拒绝。既有完整验证没有因恢复任务重复执行。
 
 ## 2026-10-11 恢复核对
 
 当前课堂 HTTPS 服务已载入 `96e47d4` 的教师互联实现：课堂 CA 校验通过，运行中的教师页面及四个引用资源与本机 `dist` 逐字节一致，教师脚本包含连接状态和断开入口；未登录调用教师状态接口及 MCP 入口均返回 401。现有部署已就绪，没有重复构建、全量测试或重启服务。
 
-用户此前反馈已完成 Platform 登录；恢复时，当前内置浏览器只有 ChatGPT 插件页，重新打开官方隧道设置仍转回登录页。复用已保存账号未进入设置，正常邮箱登录转向 `auth.openai.com` 时出现 `ERR_CONNECTION_CLOSED`。这仅证明当前内置浏览器的认证连接未完成，不能据此判断其他浏览器的登录状态或账号的隧道权限。
+用户完成 Platform 登录及人工验证，并确认访问范围后，已创建真实的“EV 教师生图互联”隧道，关联当前个人组织与选中的 ChatGPT 工作区。实际 ID 与组织配置仅保存在本机忽略目录，未提交到 Git。先前的网页登录阻塞已解除。
 
-ChatGPT 的“EV 教师生图互联”表单已重新填写用途并选择“隧道”，真实 ID 仍为空，未提交插件授权。默认本机 `data/image-mcp/` 目录尚不存在，未配置教师令牌、隧道 profile 或 runtime key。下一步从真实 Platform 隧道页面及真实教师凭证继续，之后验证官方客户端 ready 和 ChatGPT 工具调用；既有合成图片测试不替代实际 Plus 生图验收。
+官方客户端已初始化本机 `ev-teacher-images` profile，使用真实隧道、Node stdio 桥接及 runtime key 文件引用；health 绑定 `127.0.0.1:0`，目录权限 700、配置文件 600。十二项结构核对通过；`doctor` 仍因运行密钥文件缺失而失败，未启动隧道进程。
+
+ChatGPT 插件草稿已选择“隧道”、填写真实 ID，并设置本机桥接所需的“无需身份验证”；风险确认和创建尚未提交。Platform runtime key 表单已准备为 Tunnels Read + Use、七天有效期，等待账号所有者创建并通过本机隐藏输入保存。真实教师的专用令牌也尚未保存。
+
+下一步先保存两类实际凭证，再验证官方客户端 healthy/ready、完成 ChatGPT 插件授权并调用真实工具。当前不能标为已接通；学生专属对话、实际 Plus 生图和结果回传仍待验收，既有合成图片测试不能替代。
