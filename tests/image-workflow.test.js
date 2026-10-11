@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PNG } from 'pngjs';
@@ -10,6 +10,8 @@ import { createApp } from '../server/app.js';
 import { createImageWorkflow, imageDay, IMAGE_PROJECT } from '../server/image-workflow.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { openImageBridge } from '../scripts/image-mcp.js';
 
 const png = new PNG({ width: 32, height: 32 }); png.data.fill(100);
 const image = 'data:image/png;base64,' + PNG.sync.write(png).toString('base64');
@@ -102,7 +104,7 @@ test('official MCP client can list, claim, read images and return a result; toke
   const mcp = new Client({ name: 'workflow-test', version: '1' });
   const transport = new StreamableHTTPClientTransport(new URL(origin + '/mcp/images'), { requestInit: { headers: { Authorization: 'Bearer ' + token } } });
   await mcp.connect(transport); t.after(() => mcp.close());
-  assert.equal((await mcp.listTools()).tools.length, 5);
+  assert.equal((await mcp.listTools()).tools.length, 6);
   assert.equal((await mcp.callTool({ name: 'list_image_requests', arguments: {} })).structuredContent.jobs[0].id, request.requestId);
   const claimId = randomUUID(); assert.equal((await mcp.callTool({ name: 'claim_image_request', arguments: { jobId: request.requestId, claimId } })).structuredContent.repeated, false);
   const materials = await mcp.callTool({ name: 'get_image_request', arguments: { jobId: request.requestId } });
@@ -115,6 +117,61 @@ test('official MCP client can list, claim, read images and return a result; toke
   assert.equal((await fetch(origin + '/mcp/images', { headers: { Authorization: 'Bearer ' + token } })).status, 401);
   now += 86400001;
   assert.equal((await fetch(origin + '/mcp/images', { headers: { Authorization: 'Bearer ' + newer.token } })).status, 401);
+});
+
+test('connection status requires an actual tool invocation, persists activity and supports private disconnect', async t => {
+  let now = Date.now(); const { teacher, student, client, origin, db } = await setup(t, { imageNow: () => now });
+  assert.equal((await teacher('/image-mcp-connection')).data.state, 'unconfigured');
+  assert.equal((await student('/image-mcp-connection')).status, 403);
+  assert.equal((await student('/image-mcp-disconnect', {})).status, 403);
+  const { token } = (await teacher('/image-mcp-token', {})).data;
+  const mcp = new Client({ name: 'connection-test', version: '1' });
+  await mcp.connect(new StreamableHTTPClientTransport(new URL(origin + '/mcp/images'), { requestInit: { headers: { Authorization: 'Bearer ' + token } } }));
+  t.after(() => mcp.close()); await mcp.listTools();
+  assert.equal((await teacher('/image-mcp-connection')).data.state, 'waiting', 'A credential/handshake alone is not a connected generation worker');
+  const checked = (await mcp.callTool({ name: 'get_image_connection_status', arguments: {} })).structuredContent;
+  assert.equal(checked.state, 'recent'); assert.equal(checked.lastToolAt, now); assert.equal(checked.automaticGeneration, false);
+  assert.ok(!JSON.stringify(checked).includes(token)); assert.equal(checked.digest, undefined);
+  const reopened = createImageWorkflow(db, () => now), teacherUser = db.prepare("SELECT * FROM users WHERE role='teacher'").get();
+  assert.equal(reopened.connectionStatus(teacherUser).lastToolAt, now);
+  const other = client('teacher'); await other('/register', { username: 'other_' + randomUUID().slice(0, 8), name: '其他老师', password: 'password123', role: 'teacher' });
+  assert.equal((await other('/image-mcp-connection')).data.lastToolAt, null);
+  now += 120001; assert.equal((await teacher('/image-mcp-connection')).data.state, 'idle');
+  now += 86400000; assert.equal((await teacher('/image-mcp-connection')).data.state, 'expired');
+  await teacher('/image-mcp-token', {}); assert.equal((await teacher('/image-mcp-connection')).data.state, 'waiting');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM image_mcp_activity').get().n, 0);
+  assert.equal((await teacher('/image-mcp-disconnect', {})).data.state, 'unconfigured');
+  assert.equal((await fetch(origin + '/mcp/images', { headers: { Authorization: 'Bearer ' + token } })).status, 401);
+});
+
+test('private stdio bridge uses the same teacher queue and rechecks credentials in an existing session', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'image-stdio-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const dbPath = join(directory, 'classroom.sqlite'), tokenFile = join(directory, 'teacher.token');
+  const { student, teacher, payload } = await setup(t, { dbPath });
+  await student('/image-profile/register', {}); const job = payload(); await student('/image-jobs', job);
+  const { token } = (await teacher('/image-mcp-token', {})).data; writeFileSync(tokenFile, token, { mode: 0o600 });
+  if (process.platform !== 'win32') {
+    chmodSync(tokenFile, 0o644);
+    assert.throws(() => openImageBridge({ dbPath, tokenFile }), /600/, 'Do not use a credential readable by other local users');
+    chmodSync(tokenFile, 0o600);
+  }
+  const mcp = new Client({ name: 'stdio-test', version: '1' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [new URL('../scripts/image-mcp.js', import.meta.url).pathname], env: { FREE_IMPRO_DB: dbPath, FREE_IMPRO_IMAGE_TOKEN_FILE: tokenFile }, stderr: 'pipe' });
+  const errors = []; transport.stderr?.on('data', data => errors.push(data.toString()));
+  await mcp.connect(transport); t.after(() => mcp.close());
+  assert.equal((await mcp.listTools()).tools.length, 6);
+  assert.equal((await teacher('/image-mcp-connection')).data.state, 'waiting');
+  const check = (await mcp.callTool({ name: 'get_image_connection_status', arguments: {} })).structuredContent;
+  assert.equal(check.pending, 1); assert.equal(check.state, 'recent');
+  const claimId = randomUUID(); await mcp.callTool({ name: 'claim_image_request', arguments: { jobId: job.requestId, claimId } });
+  assert.equal((await mcp.callTool({ name: 'get_image_request', arguments: { jobId: job.requestId } })).content[1].type, 'image');
+  await mcp.callTool({ name: 'bind_student_conversation', arguments: { jobId: job.requestId, ...conversation() } });
+  assert.equal((await mcp.callTool({ name: 'return_generated_image', arguments: { jobId: job.requestId, claimId, image } })).structuredContent.job.status, 'completed');
+  assert.equal((await student('/image-profile/avatar')).status, 200);
+  await teacher('/image-mcp-disconnect', {});
+  const revoked = await mcp.callTool({ name: 'list_image_requests', arguments: {} }); assert.equal(revoked.isError, true);
+  assert.ok(!JSON.stringify(revoked).includes(token)); assert.ok(!errors.join('').includes(token));
+  assert.equal((await student('/image-jobs')).data.jobs[0].status, 'completed', 'Disconnect never erases the student result');
 });
 
 test('one persistent conversation per student, distinct same-name accounts, scoped metadata and safe URLs', async t => {

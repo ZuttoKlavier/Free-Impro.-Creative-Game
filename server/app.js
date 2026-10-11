@@ -30,7 +30,7 @@ export function validateWav(encoded) {
 export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, performanceNow = Date.now, imageNow = Date.now } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL, salt TEXT NOT NULL, password TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS classrooms(id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, teacher_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, capacity INTEGER NOT NULL, background TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -162,6 +162,8 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         throw error(405, '不支持的申请操作。');
       }
       if (req.method === 'POST' && path === '/api/image-mcp-token') { send(201, images.issueToken(user)); return; }
+      if (req.method === 'GET' && path === '/api/image-mcp-connection') { send(200, images.connectionStatus(user)); return; }
+      if (req.method === 'POST' && path === '/api/image-mcp-disconnect') { send(200, images.disconnect(user)); return; }
       const imageJob = /^\/api\/image-jobs\/([a-f0-9-]{36})\/(photo|reference|result|context|claim|complete|reject|conversation)$/.exec(path);
       if (imageJob) {
         const [, id, action] = imageJob;

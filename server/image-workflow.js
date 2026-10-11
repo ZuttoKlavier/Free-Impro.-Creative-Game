@@ -13,6 +13,7 @@ export function createImageWorkflow(db, now = Date.now) {
     CREATE TABLE IF NOT EXISTS image_jobs(id TEXT PRIMARY KEY, student_id TEXT NOT NULL REFERENCES users(id), class_id TEXT NOT NULL REFERENCES classrooms(id), kind TEXT NOT NULL, work_id TEXT, work_name TEXT NOT NULL, photo BLOB, reference BLOB, fingerprint TEXT NOT NULL, day TEXT NOT NULL, status TEXT NOT NULL, claim_id TEXT, result BLOB, completed_day TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(student_id,day));
     CREATE UNIQUE INDEX IF NOT EXISTS one_delivered_image_per_day ON image_jobs(student_id,completed_day) WHERE status='completed';
     CREATE TABLE IF NOT EXISTS image_mcp_tokens(digest TEXT PRIMARY KEY, teacher_id TEXT NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS image_mcp_activity(digest TEXT PRIMARY KEY REFERENCES image_mcp_tokens(digest) ON DELETE CASCADE, last_tool_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS image_conversations(student_id TEXT PRIMARY KEY REFERENCES users(id), teacher_id TEXT NOT NULL REFERENCES users(id), conversation_url TEXT UNIQUE NOT NULL, created_at INTEGER NOT NULL);`);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
@@ -48,7 +49,7 @@ export function createImageWorkflow(db, now = Date.now) {
     return { id: job.id, studentId: job.student_id, classId: job.class_id, kind: job.kind, workId: job.work_id, workName: job.work_name, status: job.status, day: job.day, createdAt: job.created_at, updatedAt: job.updated_at, ...(teacher ? { studentName: job.student_name, studentAccount: job.student_account, claimId: job.claim_id, project: IMAGE_PROJECT, conversationTitle: `${job.student_account} · 生图`, conversationUrl: conversation?.teacher_id === job.teacher_id ? conversation.conversation_url : null } : {}) };
   }
   function list(user) {
-    return all(`SELECT j.*,c.teacher_id,u.name AS student_name,u.username AS student_account FROM image_jobs j JOIN classrooms c ON c.id=j.class_id JOIN users u ON u.id=j.student_id WHERE ${user.role === 'teacher' ? 'c.teacher_id' : 'j.student_id'}=? ORDER BY j.created_at DESC LIMIT 100`, user.id).map(job => view(job, user.role === 'teacher'));
+    return all(`SELECT j.*,c.teacher_id,u.name AS student_name,u.username AS student_account FROM image_jobs j JOIN classrooms c ON c.id=j.class_id JOIN users u ON u.id=j.student_id WHERE ${user.role === 'teacher' ? 'c.teacher_id' : 'j.student_id'}=? ORDER BY CASE WHEN j.status IN ('pending','processing') THEN 0 ELSE 1 END,j.created_at DESC LIMIT 100`, user.id).map(job => view(job, user.role === 'teacher'));
   }
   function request(user, data) {
     student(user);
@@ -130,5 +131,20 @@ export function createImageWorkflow(db, now = Date.now) {
   function avatar(user) { student(user); const image = one('SELECT avatar FROM student_profiles WHERE student_id=?', user.id)?.avatar; if (!image) throw fail(404, '固定形象尚未完成。'); return Buffer.from(image); }
   function issueToken(user) { if (user.role !== 'teacher') throw fail(403, '只有教师可以连接工具。'); const token = randomBytes(32).toString('hex'); run('DELETE FROM image_mcp_tokens WHERE teacher_id=? OR expires<?', user.id, now()); const expires = now() + 86400000; run('INSERT INTO image_mcp_tokens VALUES(?,?,?)', hash(token), user.id, expires); return { token, expires }; }
   function authenticateToken(token) { if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw fail(401, '连接令牌无效。'); const user = one("SELECT u.* FROM users u JOIN image_mcp_tokens t ON u.id=t.teacher_id WHERE t.digest=? AND t.expires>? AND u.role='teacher'", hash(token), now()); if (!user) throw fail(401, '连接令牌已失效。'); return user; }
-  return { status, register, list, request, claim, finish, reject, bindConversation, asset, context, avatar, issueToken, authenticateToken };
+  function recordToolActivity(token) {
+    // Recheck every invocation, including a long-lived stdio session. Issuing a
+    // token or listing tool definitions alone is not evidence of interconnection.
+    const user = authenticateToken(token);
+    run('INSERT INTO image_mcp_activity VALUES(?,?) ON CONFLICT(digest) DO UPDATE SET last_tool_at=excluded.last_tool_at', hash(token), now());
+    return user;
+  }
+  function connectionStatus(user) {
+    if (user.role !== 'teacher') throw fail(403, '只有教师可以查看工具连接。');
+    const token = one('SELECT t.expires,a.last_tool_at FROM image_mcp_tokens t LEFT JOIN image_mcp_activity a ON a.digest=t.digest WHERE t.teacher_id=? ORDER BY t.expires DESC LIMIT 1', user.id);
+    const state = !token ? 'unconfigured' : token.expires <= now() ? 'expired' : token.last_tool_at == null ? 'waiting' : now() - token.last_tool_at < 120000 ? 'recent' : 'idle';
+    const counts = one("SELECT SUM(j.status='pending') AS pending,SUM(j.status='processing') AS processing FROM image_jobs j JOIN classrooms c ON c.id=j.class_id WHERE c.teacher_id=?", user.id);
+    return { state, tokenExpiresAt: token?.expires ?? null, lastToolAt: token?.last_tool_at ?? null, pending: counts.pending || 0, processing: counts.processing || 0, project: IMAGE_PROJECT, automaticGeneration: false };
+  }
+  function disconnect(user) { if (user.role !== 'teacher') throw fail(403, '只有教师可以断开工具。'); run('DELETE FROM image_mcp_tokens WHERE teacher_id=?', user.id); return connectionStatus(user); }
+  return { status, register, list, request, claim, finish, reject, bindConversation, asset, context, avatar, issueToken, authenticateToken, recordToolActivity, connectionStatus, disconnect };
 }

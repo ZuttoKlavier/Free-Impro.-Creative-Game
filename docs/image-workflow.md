@@ -27,6 +27,7 @@
 
 | 工具 | 作用 |
 | --- | --- |
+| `get_image_connection_status` | 查看权限范围内的连接活动、到期时间与申请数量，不代表自动生图已接通 |
 | `list_image_requests` | 查看本教师的申请，不触发生图 |
 | `claim_image_request` | 领取申请并保留 UUID 领取编号，重复领取不能再次生图 |
 | `get_image_request` | 返回提示、参考图、EV 项目及既有学生对话 |
@@ -35,7 +36,9 @@
 
 支持 `document.modelContext` 的教师网页还注册同名页面工具，并沿用教师会话权限。开发代理和生产局域网 HTTPS 服务均转发 MCP 端点，HTTP 证书设置端口不提供 MCP。
 
-**尚未完成：**ChatGPT 网页远程插件的公开可达 HTTPS 部署与认证兼容性、实际图片生成、无人值守网页操作与自动结果回传。本地 MCP 测试成功不证明这些连接已经完成。Plus 登录不能用作官方图像 API 授权，见 [官方限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)；网页版插件安装方式见 [官方 MCP 指南](https://learn.chatgpt.com/docs/extend/mcp)。不保存 Plus 密码、网页 Cookie 或访问令牌到课堂软件。
+2026-10-11 增加官方 SDK stdio 本机桥接、教师自动刷新与连接活动检测，可交由 OpenAI 官方安全隧道访问，无需公开课堂端口。详见 [本机隧道连接说明](teacher-image-tunnel.md)。
+
+**尚未完成：**真实 Platform 隧道配置与 ChatGPT 插件授权、实际图片生成、无人值守网页操作与自动结果回传。本地 MCP 测试成功不证明这些连接已经完成。Plus 登录不能用作官方图像 API 授权，见 [官方限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)；网页版插件安装方式见 [官方 MCP 指南](https://learn.chatgpt.com/docs/extend/mcp)。不保存 Plus 密码、网页 Cookie 或访问令牌到课堂软件。
 
 ## 本轮验证
 

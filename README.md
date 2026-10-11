@@ -134,7 +134,9 @@ HTTPS 生产入口的入课二维码使用配置好的局域网地址，即使�
 
 本地已提供官方 MCP SDK 的 `/mcp/images` 工具端点，以及支持 `document.modelContext` 的教师页面工具：查看申请、领取、读取参考、绑定学生对话、回传图片。端点令牌只允许处理当前教师的申请，有效 24 小时；创建新令牌撤销旧令牌。局域网 HTTPS 和开发代理均转发该端点。
 
-**接入边界：**本地工具端点与教师手动流程已实现；尚未部署 ChatGPT 网页能访问且认证兼容的远程插件，未验证无人值守网页生图与自动图片回传。项目说明已在网页保存，但不会自行创建学生对话或连接课堂服务。当前没有注册生图学生名单，尚未为真实学生创建网页对话。Plus 登录不能代替官方图像 API 授权，见 [官方限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。网页插件接入见 [官方 MCP 指南](https://learn.chatgpt.com/docs/extend/mcp)。
+2026-10-11 增加教师申请自动刷新、连接状态、专用凭证撤销和官方 SDK stdio 本机桥接。可通过 OpenAI 官方安全隧道访问，无需公开课堂端口；凭证与平台密钥只留在本机。配置及真实接通判据见 [教师生图互联](docs/teacher-image-tunnel.md)。本轮 88 项单元/接口测试、2 项 Chrome 生图流程测试和网页构建通过。
+
+**接入边界：**本机互联工具与教师手动流程已实现；尚未配置真实 Platform 隧道及 ChatGPT 插件授权，未验证无人值守网页生图与自动图片回传。“最近互通”仅记录实际工具调用，不代表生图已接通。项目说明已在网页保存，但不会自行创建学生对话。Plus 登录不能代替官方图像 API 授权，见 [官方限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。网页插件接入见 [官方 MCP 指南](https://learn.chatgpt.com/docs/extend/mcp)。
 
 实现和验证记录见 [生图流程说明](docs/image-workflow.md)。旧图像 API 适配器保留作隔离测试，生产 `/api/characters` 返回更新提示，不再自动调用它。
 
