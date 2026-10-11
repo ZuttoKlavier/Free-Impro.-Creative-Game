@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { setBarsTouch, setTempoTouch } from './rhythm-touch-controls.js';
+test.use({ hasTouch: true });
 
 async function openRhythm(page) {
   await page.goto('/');
@@ -23,7 +25,7 @@ async function expectSingleScreen(page, bars) {
   }));
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.width);
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.height);
-  expect(layout.controls).toHaveLength(16 + bars + 8);
+  expect(layout.controls).toHaveLength(16 + bars + 11);
   for (const c of layout.controls) {
     expect(c.left, c.label).toBeGreaterThanOrEqual(0);
     expect(c.top, c.label).toBeGreaterThanOrEqual(0);
@@ -42,8 +44,7 @@ for (const [width, height] of [[568, 320], [667, 375], [844, 390], [750, 382], [
     test(`${bars} bars, all steps and controls stay reachable in one ${width}x${height} screen`, async ({ page }) => {
       await page.setViewportSize({ width, height });
       await openRhythm(page);
-      await page.getByLabel('编创小节数').fill(String(bars));
-      await page.getByLabel('编创小节数').press('Tab');
+      await setBarsTouch(page, bars);
       await expectSingleScreen(page, bars);
       await page.getByRole('button', { name: `第 ${bars} 小节`, exact: true }).click();
       await page.getByRole('button', { name: `第 ${bars} 小节第 16 格`, exact: true }).click();
@@ -61,17 +62,15 @@ for (const [width, height] of [[568, 320], [667, 375], [844, 390], [750, 382], [
   }
 }
 
-for (const height of [120, 140, 180]) for (const bars of [1, 16]) test(`${bars} bars retain all controls in a ${height}px keyboard viewport`, async ({ page }) => {
+for (const height of [120, 140, 180]) for (const bars of [1, 16]) test(`${bars} bars retain all touch controls in a ${height}px viewport`, async ({ page }) => {
   await page.setViewportSize({ width: 568, height: 320 });
   await openRhythm(page);
-  await page.getByLabel('编创小节数').fill(String(bars));
-  await page.getByLabel('编创小节数').press('Tab');
+  await setBarsTouch(page, bars);
   await page.setViewportSize({ width: 568, height });
   await expect(page.locator('.student-rhythm')).toHaveClass(/rhythm-tight/);
-  for (const input of ['编创小节数', '试听速度']) {
-    await page.getByLabel(input).focus();
-    await expectSingleScreen(page, bars);
-  }
+  await setTempoTouch(page, 101);
+  await page.getByRole('button', { name: '减慢试听速度', exact: true }).tap();
+  await expectSingleScreen(page, bars);
   await page.getByRole('button', { name: `第 ${bars} 小节`, exact: true }).click();
   await page.getByRole('button', { name: `第 ${bars} 小节第 16 格`, exact: true }).click();
   await expect(page.getByRole('button', { name: `第 ${bars} 小节第 16 格`, exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -85,7 +84,7 @@ for (const height of [120, 140, 180]) for (const bars of [1, 16]) test(`${bars} 
   await page.getByRole('button', { name: '保存节奏', exact: true }).click();
   await expect(page.locator('[data-save]')).toBeEnabled();
   await expectSingleScreen(page, bars);
-  await page.screenshot({ path: `test-results/rhythm-keyboard-${height}-${bars}-bars.png` });
+  await page.screenshot({ path: `test-results/rhythm-touch-${height}-${bars}-bars.png` });
   await page.getByRole('button', { name: '返回声音库', exact: true }).click();
   await expect(page.locator('.student-rhythm')).toBeHidden();
 });

@@ -65,6 +65,7 @@ export class Sequencer {
     this._cursor = null;
     this._gains = new Map();
     this._sources = new Map();
+    this._sourceNotes = new WeakMap();
     this._generation = 0;
     this._disposed = false;
     this._lookAhead = 0.12;
@@ -121,6 +122,10 @@ export class Sequencer {
         pendingPattern: track.pendingPattern && [...track.pendingPattern], active: track.active,
         waiting: track.waiting, volume: track.volume, position: { ...track.position },
         pendingSubmissionId: track.pendingReplacement?.submissionId ?? null,
+        sounding: [...(this._sources.get(track.id) || [])]
+          .map(source => this._sourceNotes.get(source))
+          .filter(note => note && note.time <= now && now < note.time + note.duration)
+          .map(note => ({ ...note })),
       })),
     };
   }
@@ -372,6 +377,9 @@ export class Sequencer {
         this._sources.get(track.id).add(source);
         source.onended = () => { this._sources.get(track.id)?.delete(source); source.disconnect(); };
         source.start(time);
+        // Preserve the buffer actually scheduled, so delayed UI frames and live
+        // tempo edits cannot change the duration of a voice already sounding.
+        this._sourceNotes.set(source, { step, length, time, duration: source.buffer.duration, loop });
         event.sources.push({ id: track.id, source });
         event.triggers.push(track.id);
       }

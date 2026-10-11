@@ -20,9 +20,13 @@
 .student-rhythm-heading [data-close] { flex-shrink: 0; }
 .rhythm-landscape-content { display: grid; grid-template-rows: auto minmax(48px, 1fr) auto auto; gap: 8px; min-width: 0; min-height: 0; }
 .rhythm-setup { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 14px; min-width: 0; }
-.student-rhythm .rhythm-controls { display: flex; gap: 10px; margin: 0; }
-.student-rhythm .rhythm-controls label { display: grid; gap: 2px; color: #555; font-size: 11px; }
-.student-rhythm .rhythm-controls input { width: 70px; height: 32px; min-height: 0; margin: 0; padding: 4px 6px; }
+.student-rhythm .rhythm-controls { display: grid; grid-template-columns: 96px 188px; gap: 10px; margin: 0; min-width: 0; }
+.student-rhythm .rhythm-control { display: grid; gap: 2px; color: #555; font-size: 11px; line-height: 1.2; min-width: 0; }
+.rhythm-stepper { display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px; align-items: center; gap: 4px; }
+.rhythm-tempo { display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px 28px; align-items: center; gap: 3px; }
+.student-rhythm .rhythm-controls .secondary { min-height: 32px; padding: 0; font-size: 17px; touch-action: manipulation; }
+.student-rhythm .rhythm-controls output { min-width: 0; text-align: center; font-variant-numeric: tabular-nums; font-size: 12px; }
+.student-rhythm .rhythm-controls input[type="range"] { width: 100%; min-width: 0; height: 32px; min-height: 0; margin: 0; padding: 0; touch-action: none; }
 .student-rhythm .rhythm-pages { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; margin: 0; min-width: 0; }
 .student-rhythm .rhythm-pages button { min-width: 0; min-height: 30px; padding: 2px; font-size: 12px; }
 .student-rhythm .secondary, .student-rhythm .primary { min-height: 36px; padding: 6px 10px; border-radius: 8px; font-size: 12px; background: #f3f3f3; border: 1px solid #dedede; color: #555; box-shadow: none; }
@@ -32,6 +36,7 @@
 .rhythm-water-stage { position: relative; isolation: isolate; min-width: 0; min-height: 0; }
 .student-rhythm-grid { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); gap: 2px; width: 100%; height: 100%; touch-action: none; }
 .student-rhythm-grid button { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 2px 0; background: transparent; border: 0; color: #19382f; }
+.student-rhythm-grid button:active:not(:disabled) { transform: none; }
 .student-rhythm-grid .rhythm-dot { width: min(32px, 70%); aspect-ratio: 1; flex-shrink: 0; border-radius: 50%; background: #edf2f0; border: 2px solid #b6c9c3; transition: background .15s, border-color .15s, box-shadow .15s; }
 .student-rhythm-grid .rhythm-dot-number { font-size: 11px; line-height: 1.2; }
 .student-rhythm-grid button[aria-pressed="true"] .rhythm-dot { background: #227a65; border-color: #227a65; box-shadow: 0 0 0 4px #227a6518; }
@@ -39,8 +44,12 @@
 .rhythm-water { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: -1; fill: #227a65; }
 .rhythm-water rect { transition: width 280ms cubic-bezier(.22,.8,.25,1); }
 .rhythm-water circle { transition: cx 280ms cubic-bezier(.22,.8,.25,1), cy 280ms ease; }
-.rhythm-water [data-water-key] { transform-box: fill-box; transform-origin: center; animation: water-arrive 300ms ease-out; }
-@keyframes water-arrive { 0% { transform: scale(.72, 1.2); } 55% { transform: scale(1.08, .9); } 100% { transform: scale(1); } }
+.rhythm-water [data-water-key] { animation: water-arrive 300ms ease-out; }
+.rhythm-water [data-playback-shapes] { fill: #e4ab35; }
+.rhythm-water [data-playback-shapes] rect, .rhythm-water [data-playback-shapes] circle { transition: none; }
+.student-rhythm-grid button.is-playing .rhythm-dot { background: transparent; border-color: transparent; box-shadow: none; }
+.student-rhythm-grid button.is-playing .rhythm-dot-number { color: #704900; font-weight: 700; }
+@keyframes water-arrive { from { opacity: 0; } to { opacity: 1; } }
 .student-rhythm-grid button[aria-pressed="true"] .rhythm-dot::after { content: ''; display: block; width: 9px; height: 5px; border-radius: 50%; margin: 6px 0 0 6px; background: #ffffff80; transform: rotate(-30deg); }
 .rhythm-actions { display: grid; grid-template-columns: 1.4fr 1.15fr 1fr .65fr 1fr; gap: 5px; min-width: 0; }
 .rhythm-actions button { min-width: 0; }
@@ -56,8 +65,12 @@
 .rhythm-compact .student-rhythm-heading h2 { font-size: 16px; }
 .rhythm-compact .student-rhythm-heading [data-name] { display: none; }
 .rhythm-compact .rhythm-landscape-content { gap: 4px; grid-template-rows: auto minmax(30px, 1fr) auto auto; }
-.rhythm-compact .rhythm-controls label { font-size: 10px; }
-.rhythm-compact .rhythm-controls input { height: 26px; }
+.student-rhythm.rhythm-compact .rhythm-controls { grid-template-columns: 80px 164px; gap: 8px; }
+.rhythm-compact .rhythm-control { font-size: 10px; }
+.rhythm-compact .rhythm-stepper { grid-template-columns: 24px minmax(0, 1fr) 24px; }
+.rhythm-compact .rhythm-tempo { grid-template-columns: 24px minmax(0, 1fr) 24px 26px; gap: 2px; }
+.student-rhythm.rhythm-compact .rhythm-controls .secondary { min-height: 26px; }
+.student-rhythm.rhythm-compact .rhythm-controls input[type="range"] { height: 26px; }
 .rhythm-compact .rhythm-pages { gap: 2px; }
 .rhythm-compact .rhythm-pages button { min-height: 24px; }
 .rhythm-compact .rhythm-actions button, .rhythm-compact [data-close] { min-height: 30px; padding: 3px 6px; font-size: 11px; }
@@ -69,9 +82,13 @@
 .rhythm-tight .student-rhythm-heading h2 { font-size: 14px; line-height: 1; }
 .rhythm-tight .rhythm-landscape-content { gap: 2px; grid-template-rows: auto minmax(20px, 1fr) auto auto; }
 .rhythm-tight .rhythm-setup { gap: 6px; }
-.rhythm-tight .rhythm-controls { gap: 8px; }
-.rhythm-tight .rhythm-controls label { gap: 1px; font-size: 9px; line-height: 1; }
-.student-rhythm.rhythm-tight .rhythm-controls input { width: 52px; height: 22px; padding: 1px 4px; font-size: 11px; }
+.student-rhythm.rhythm-tight .rhythm-controls { grid-template-columns: 70px 154px; gap: 6px; }
+.rhythm-tight .rhythm-control { gap: 1px; font-size: 9px; line-height: 1; }
+.rhythm-tight .rhythm-stepper { grid-template-columns: 22px minmax(0, 1fr) 22px; gap: 2px; }
+.rhythm-tight .rhythm-tempo { grid-template-columns: 22px minmax(0, 1fr) 22px 24px; }
+.student-rhythm.rhythm-tight .rhythm-controls .secondary { min-height: 22px; font-size: 14px; }
+.student-rhythm.rhythm-tight .rhythm-controls output { font-size: 11px; }
+.student-rhythm.rhythm-tight .rhythm-controls input[type="range"] { height: 22px; }
 .rhythm-tight .rhythm-pages { grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 1px; }
 .rhythm-tight .rhythm-pages button { min-height: 22px; padding: 1px; font-size: 10px; line-height: 1; }
 .rhythm-tight .rhythm-actions { gap: 2px; }

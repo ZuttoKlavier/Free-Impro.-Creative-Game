@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { encodeWav } from '../../src/audio.js';
+import { setBarsTouch } from './rhythm-touch-controls.js';
+test.use({ hasTouch: true });
 
 test('student queues rhythm offline, teacher accepts and receives the pattern', async ({ page, context }) => {
   const teacher = await context.newPage(), headers = { Origin: process.env.TEST_APP_ORIGIN };
@@ -19,7 +21,11 @@ test('student queues rhythm offline, teacher accepts and receives the pattern', 
   await page.reload(); await page.locator('#classroom-tab').click(); await expect(page.locator('#send-rhythm')).toBeEnabled();
   await page.route('**/api/student/**', route => route.abort()); await page.locator('#send-rhythm').click();
   await expect(page.locator('#outbox-panel')).toContainText('我的节奏');
-  await page.unroute('**/api/student/**'); await page.locator('#retry-queue').click();
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/storage.js')).outbox('list')).some(item => item.kind === 'rhythm' && item.error))).toBe(true);
+  const sent = page.waitForResponse(response => response.url().endsWith('/rhythm-request') && response.request().method() === 'POST' && response.ok());
+  await page.unroute('**/api/student/**');
+  // Reconnection can flush the queue before a pointer click settles on its button.
+  await page.evaluate(() => document.querySelector('#retry-queue')?.click()); await sent;
   await expect(page.locator('.classroom-rhythm')).toContainText('待教师接受');
   await teacher.goto('/teacher.html'); await expect(teacher.locator('[data-rhythm-accept]')).toBeVisible();
   const step = teacher.locator('.rhythm-step[data-step="3"]'); await expect(step).toHaveAttribute('aria-pressed', 'false');
@@ -44,7 +50,7 @@ test('phone rhythm editor persists a draft and preserves it through backup resto
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2); await page.mouse.down();
   await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 8 }); await page.mouse.up();
   await expect(page.locator('.student-rhythm .held')).toHaveCount(4);
-  await page.getByLabel('编创小节数').fill('2'); await page.getByLabel('编创小节数').press('Tab');
+  await setBarsTouch(page, 2);
   await page.getByRole('button', { name: '复制到下一小节' }).click();
   await page.getByRole('button', { name: '第 2 小节', exact: true }).click();
   await expect(page.getByRole('button', { name: '第 2 小节第 1 格', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -58,7 +64,7 @@ test('phone rhythm editor persists a draft and preserves it through backup resto
   await page.locator('.sound-open').click(); await page.getByRole('button', { name: '删除声音', exact: true }).click(); await page.locator('#delete-dialog').getByRole('button', { name: '删除声音', exact: true }).click();
   await expect(page.locator('#library-count')).toHaveText('0'); await page.locator('#backup-file').setInputFiles(backup);
   await expect(page.locator('#library-count')).toHaveText('1'); await page.locator('.sound-open').click(); await page.getByRole('button', { name: '节奏编创', exact: true }).click();
-  await expect(page.getByLabel('编创小节数')).toHaveValue('2');
+  await expect(page.getByLabel('编创小节数')).toHaveText('2');
   await expect(page.getByRole('button', { name: '第 1 小节第 1 格', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.locator('.student-rhythm').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await expect(page.locator('.student-rhythm .held')).toHaveCount(4);
