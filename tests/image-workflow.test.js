@@ -180,13 +180,32 @@ test('one persistent conversation per student, distinct same-name accounts, scop
   const binding = conversation(), path = '/image-jobs/' + first.requestId + '/conversation';
   assert.equal((await student(path, binding)).status, 403);
   assert.equal((await teacher(path, { ...binding, projectUrl: 'https://chatgpt.com/' })).status, 400);
-  for (const conversationUrl of ['https://example.com/c/' + randomUUID(), 'https://chatgpt.com/', binding.conversationUrl + '?token=secret', 'https://chatgpt.com/g/g-p-other/c/' + randomUUID(), 'https://user@chatgpt.com/c/' + randomUUID()]) assert.equal((await teacher(path, { ...binding, conversationUrl })).status, 400);
+  const projectPath = new URL(IMAGE_PROJECT.url).pathname.replace(/\/project$/, '');
+  const invalidUrls = [
+    'https://example.com/c/' + randomUUID(), 'https://chatgpt.com/', binding.conversationUrl + '?token=secret',
+    binding.conversationUrl + '?', binding.conversationUrl + '#', binding.conversationUrl + '#image',
+    'http://chatgpt.com/c/' + randomUUID(), 'https://chatgpt.com/g/g-p-other/c/' + randomUUID(),
+    'https://chatgpt.com' + projectPath + 'a-evsheng-tu/c/' + randomUUID(),
+    'https://chatgpt.com' + projectPath + '-evsheng_tu/c/' + randomUUID(),
+    'https://chatgpt.com' + projectPath + '-evsheng--tu/c/' + randomUUID(),
+    'https://chatgpt.com' + projectPath + '-evsheng-tu%2Fc/' + randomUUID(),
+    'https://chatgpt.com' + projectPath + '-evsheng-tu/c%2F' + randomUUID(),
+    'https://chatgpt.com' + projectPath + '-evsheng-tu/c/not-a-uuid',
+    'https://user@chatgpt.com/c/' + randomUUID(),
+  ];
+  for (const conversationUrl of invalidUrls) assert.equal((await teacher(path, { ...binding, conversationUrl })).status, 400, conversationUrl);
   assert.equal((await teacher(path, binding)).status, 200);
   assert.equal((await teacher(path, binding)).status, 200);
   assert.equal((await teacher(path, conversation())).status, 409, 'Existing conversation is never overwritten');
   const other = client('student'); await other('/enter-classroom', { name: '同学', code: room.code }); await other('/image-profile/register', {});
   const second = payload(); await other('/image-jobs', second);
   assert.equal((await teacher('/image-jobs/' + second.requestId + '/conversation', binding)).status, 409, 'Cannot share another student conversation');
+  const boundId = new URL(binding.conversationUrl).pathname.slice(3);
+  for (const conversationUrl of [
+    'https://chatgpt.com' + projectPath + '/c/' + boundId,
+    'https://chatgpt.com' + projectPath + '-evsheng-tu-chu-cun-ku/c/' + boundId,
+    'https://chatgpt.com/c/' + boundId.toUpperCase(),
+  ]) assert.equal((await teacher('/image-jobs/' + second.requestId + '/conversation', { ...binding, conversationUrl })).status, 409, 'Conversation aliases cannot be shared by students');
   assert.equal((await teacher('/image-jobs/' + second.requestId + '/conversation', conversation())).status, 200);
   const jobs = (await teacher('/image-jobs')).data.jobs;
   assert.equal(jobs[0].studentName, jobs[1].studentName); assert.notEqual(jobs[0].conversationTitle, jobs[1].conversationTitle);
@@ -195,4 +214,24 @@ test('one persistent conversation per student, distinct same-name accounts, scop
   assert.equal(visible.project, undefined); assert.equal(visible.conversationUrl, undefined);
   const reopenedWorkflow = createImageWorkflow(db);
   assert.equal(reopenedWorkflow.context(db.prepare("SELECT * FROM users WHERE role='teacher'").get(), first.requestId).conversationUrl, binding.conversationUrl);
+});
+
+test('EV project conversations accept observed safe slugs, the project ID alone and root links', async t => {
+  const { student, teacher, client, room, payload } = await setup(t);
+  const projectPath = new URL(IMAGE_PROJECT.url).pathname.replace(/\/project$/, '');
+  const allowedPaths = [projectPath + '-evsheng-tu-chu-cun-ku/c/', projectPath + '/c/', '/c/'];
+  for (const [index, prefix] of allowedPaths.entries()) {
+    const current = index === 0 ? student : client('student');
+    if (index !== 0) await current('/enter-classroom', { name: '地址测试同学', code: room.code });
+    await current('/image-profile/register', {});
+    const request = payload(); await current('/image-jobs', request);
+    const binding = { projectUrl: IMAGE_PROJECT.url, conversationUrl: 'https://chatgpt.com' + prefix + randomUUID() };
+    const path = '/image-jobs/' + request.requestId + '/conversation';
+    const saved = await teacher(path, binding);
+    assert.equal(saved.status, 200);
+    assert.equal(saved.data.job.conversationUrl, binding.conversationUrl, 'Preserve the actual observed URL');
+    assert.equal((await teacher(path, binding)).status, 200, 'Retrying the same binding is idempotent');
+    assert.equal((await teacher('/image-jobs/' + request.requestId + '/complete', { image })).status, 200);
+    assert.equal((await current('/image-profile/avatar')).status, 200);
+  }
 });

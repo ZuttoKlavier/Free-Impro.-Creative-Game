@@ -31,6 +31,18 @@ export function initTeacherImages({ notify }) {
       : '通过局域网地址访问时不能保存凭证。请在运行课堂服务的教师电脑上打开下方本机入口，登录后重新创建并保存令牌。';
   }
   function clearRows() { rows.clear(); claims.clear(); $('teacher-image-requests').replaceChildren(); }
+  function renderGeneratedResult(row, job) {
+    const previous = row.querySelector('[data-generated-result]');
+    if (job.status !== 'completed') { previous?.remove(); return; }
+    if (previous) return;
+    const result = document.createElement('figure'); result.className = 'image-generated-result'; result.dataset.generatedResult = '';
+    const source = '/api/teacher/image-jobs/' + encodeURIComponent(job.id) + '/result';
+    const image = document.createElement('img'); image.src = source; image.alt = `${job.studentName}的${job.kind === 'identity' ? '固定学生形象' : '作品图片'}`;
+    const download = document.createElement('a'); download.className = 'secondary'; download.href = source; download.textContent = '下载生成图片';
+    const name = `${job.studentName || '学生'}-${job.kind === 'identity' ? '固定形象' : job.workName || '作品'}-图片`;
+    download.download = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-') + '.png';
+    result.append(image, download); row.append(result);
+  }
   function renderConnection(status) {
     const messages = { unconfigured: '图片工具尚未配置', waiting: '凭证已创建，等待工具实际调用', recent: '图片工具最近已互通', idle: '图片工具近期没有调用，请检查连接', expired: '图片连接凭证已过期，请重新创建' };
     connection.textContent = '教师服务已连接。' + messages[status.state] + '。申请与结果自动同步；ChatGPT 生图授权和无人值守处理需另行完成。';
@@ -77,11 +89,13 @@ export function initTeacherImages({ notify }) {
             if (link) { link.href = job.conversationUrl; link.textContent = '打开学生专属对话'; }
             previous.row.querySelector('.image-conversation-binding')?.remove();
           }
+          renderGeneratedResult(previous.row, job);
           continue;
         }
         const row = document.createElement('article'); row.className = 'image-request'; row.dataset.job = job.id;
         row.innerHTML = `<div><h3>${escape(job.studentName)} · ${job.kind === 'identity' ? '固定学生形象' : escape(job.workName)}</h3><p data-state>${escape(label)}</p></div>${['pending', 'processing'].includes(job.status) ? `<div class="image-request-actions"><button class="secondary" data-prepare>查看生成材料</button><label class="secondary image-upload">导入生成图片<input type="file" accept="image/png,image/jpeg,image/webp" data-result hidden></label><button class="text-button" data-reject>结束申请</button></div><div data-materials hidden></div>` : ''}`;
         rows.set(job.id, { row, job }); container.append(row);
+        renderGeneratedResult(row, job);
         if (!row.querySelector('[data-prepare]')) continue;
         row.querySelector('[data-prepare]').onclick = () => run(async () => {
           if (job.status === 'pending') { if (!claims.has(job.id)) claims.set(job.id, crypto.randomUUID()); const result = await api('/image-jobs/' + job.id + '/claim', { claimId: claims.get(job.id) }); Object.assign(job, result.job); }
@@ -107,8 +121,8 @@ export function initTeacherImages({ notify }) {
           // then uses the same bounded PNG path as every other image return.
           const bitmap = await createImageBitmap(file), canvas = document.createElement('canvas'); canvas.width = canvas.height = 256; canvas.getContext('2d').drawImage(bitmap, 0, 0, 256, 256); bitmap.close();
           const image = await toDataURL(await normalizeGeneratedImage(canvas.toDataURL('image/png')));
-          await api('/image-jobs/' + job.id + '/complete', { image, claimId: job.claimId });
-          row.remove(); notify('图片已回传，学生会自动保存结果。');
+          const result = await api('/image-jobs/' + job.id + '/complete', { image, claimId: job.claimId });
+          Object.assign(job, result.job); notify('图片已回传，学生会自动保存结果。');
         }); };
         row.querySelector('[data-reject]').onclick = () => run(async () => { await api('/image-jobs/' + job.id + '/reject', {}); row.remove(); notify('申请已结束，原始照片已删除；今日额度保留为已使用。'); });
       }

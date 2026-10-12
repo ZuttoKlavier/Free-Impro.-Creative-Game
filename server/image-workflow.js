@@ -78,11 +78,15 @@ export function createImageWorkflow(db, now = Date.now) {
     const job = teacherJob(user, id);
     if (data.projectUrl !== IMAGE_PROJECT.url) throw fail(400, '请在 EV生图储存库 中建立对话。');
     let url; try { url = new URL(data.conversationUrl); } catch { throw fail(400, '请粘贴此学生的 ChatGPT 对话地址。'); }
-    const projectPath = new URL(IMAGE_PROJECT.url).pathname.replace(/\/project$/, '');
-    const path = url.pathname.startsWith(projectPath + '/c/') ? url.pathname.slice(projectPath.length) : url.pathname;
-    if (url.origin !== 'https://chatgpt.com' || url.username || url.password || url.search || url.hash || !/^\/c\/[a-f0-9-]{36}$/i.test(path) || !uuid(path.slice(3))) throw fail(400, '只接受 ChatGPT 的具体对话地址。');
+    const projectId = new URL(IMAGE_PROJECT.url).pathname.split('/')[2];
+    const rootConversation = /^\/c\/([a-f0-9-]{36})$/i.exec(url.pathname);
+    const projectConversation = /^\/g\/(g-p-[a-z0-9]+)(?:-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)?\/c\/([a-fA-F0-9-]{36})$/.exec(url.pathname);
+    const conversationId = rootConversation?.[1] || (projectConversation?.[1] === projectId ? projectConversation[2] : null);
+    if (url.origin !== 'https://chatgpt.com' || url.username || url.password || url.href.includes('?') || url.href.includes('#') || typeof data.conversationUrl !== 'string' || /[%\\]/.test(data.conversationUrl) || !uuid(conversationId)) throw fail(400, '只接受 ChatGPT 的具体对话地址。');
     return atomic(() => {
-      const existing = one('SELECT * FROM image_conversations WHERE student_id=? OR conversation_url=?', job.student_id, url.href);
+      // Root, project and project-slug URLs can refer to the same conversation.
+      // Keep the observed URL, but prevent its aliases from binding another student.
+      const existing = one('SELECT * FROM image_conversations WHERE student_id=? OR lower(substr(conversation_url,-36))=?', job.student_id, conversationId.toLowerCase());
       if (existing) {
         if (existing.student_id !== job.student_id || existing.teacher_id !== user.id || existing.conversation_url !== url.href) throw fail(409, '学生或对话已有其他绑定，请沿用原对话。');
       } else run('INSERT INTO image_conversations VALUES(?,?,?,?)', job.student_id, user.id, url.href, now());
