@@ -23,6 +23,11 @@ assert(StudentPolicy("http://class.empfreeimpro.xyz/") == nil)
 assert(StudentPolicy("https://user:pass@class.empfreeimpro.xyz/") == nil)
 assert(StudentPolicy("https://class.empfreeimpro.xyz/teacher.html") == nil)
 let policy = StudentPolicy("https://class.empfreeimpro.xyz/")!
+let entered = StudentPolicy("https://CLASS.EMPFREEIMPRO.XYZ:443/")!
+assert(entered.origin.absoluteString == "https://class.empfreeimpro.xyz/")
+assert(String(entered.origin.absoluteString.dropLast()) == "https://class.empfreeimpro.xyz")
+assert(entered.sameOrigin(URL(string: "https://class.empfreeimpro.xyz/")!))
+assert(StudentPolicy("https://192.168.31.217:8443/")!.origin.port == 8443)
 assert(!policy.sameOrigin(URL(string: "https://class.empfreeimpro.xyz:8443/")!))
 assert(!policy.sameOrigin(URL(string: "https://sub.class.empfreeimpro.xyz/")!))
 print("Policy passed")

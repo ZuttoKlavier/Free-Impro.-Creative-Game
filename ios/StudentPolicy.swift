@@ -13,6 +13,8 @@ struct StudentPolicy {
               parts.user == nil, parts.password == nil,
               parts.query == nil, parts.fragment == nil,
               ["", "/"].contains(parts.path), (parts.port ?? 443) > 0, (parts.port ?? 443) <= 65535 else { return nil }
+        parts.host = host.lowercased()
+        if parts.port == 443 { parts.port = nil }
         parts.path = "/"
         guard let url = parts.url else { return nil }; origin = url
     }

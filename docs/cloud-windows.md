@@ -1,10 +1,20 @@
 # Windows 云课堂部署
 
-目标服务器是用户已开通的阿里云杭州 Windows Server 2022，公网 IPv4 为 `47.96.236.36`。课堂使用 `class.empfreeimpro.xyz`，现有万小智官网继续使用原地址。这份文档和安装脚本属于部署准备；云端安装、DNS、公开证书和真实手机连接均尚未完成实测。本地开发环境没有 Windows 或 PowerShell 运行时，不能把本地静态检查当作 Windows 安装成功。
+目标服务器是用户已开通的阿里云杭州 Windows Server 2022，公网 IPv4 为 `47.96.236.36`。课堂计划使用 `class.empfreeimpro.xyz`，现有万小智官网继续使用原地址。2026-10-13 已完成云服务器内部后台的实际安装、构建和独立验证；DNS、公开 HTTPS 和真实手机课堂连接尚未启用。域名未备案，因此内部安装成功不表示公网课堂已经上线。
 
-2026-10-13 已通过云助手只读检查：服务器是 Windows Server 2022，PowerShell 为 5.1；尚未安装 Node.js，没有 `C:\EMPVC` 部署目录，80/443/3000 没有监听服务，也没有已有 EMPVC 服务；课堂域名尚无 A 记录。这些是前置状态核对，不是安装与连通性验证。
+首次只读前检确认服务器为 Windows Server 2022、PowerShell 5.1；当时没有 Node.js、`C:\EMPVC`、EMPVC 服务或 80/443/3000 监听。后续私有安装使用固定源码提交 `2705870c0846e0958018180feaefef0528e9fca7`，安装任务 `t-hz06zv0yvb961hc` 成功退出（退出码 0），完整依赖安装和 Vite 生产构建均成功。
 
-同日分阶段的 `Bootstrap-Classroom.ps1`、`Install-Classroom.ps1` 和 `Enable-ClassroomHttps.ps1` 已通过服务器 PowerShell 5.1 的 AST 语法检查（云助手任务 `t-hz06zv0j6idoni8`，退出码 0，检查 3 个脚本）；这不执行部署命令。Bootstrap 随后将校验清单改为保存后按文本读取，避免响应类型差异，最终下载脚本仍须在执行前重新解析。只有实际运行与健康验证才能确认安装成功。
+分阶段的三个脚本通过服务器 PowerShell 5.1 的 AST 语法检查（任务 `t-hz06zv0j6idoni8`，退出码 0）。Bootstrap 随后将校验清单改为保存后按文本读取；最终脚本在安装前重新解析并核对 SHA256，也通过验证。服务器能正常访问 GitHub codeload、官方发布包、Node.js 和 npm；GitHub 原始文件地址连接被重置，最终采用云助手传入经过哈希核验的脚本，没有关闭证书验证或使用非官方镜像。
+
+独立部署验证任务 `t-hz06zv1lw1mf37k` 成功退出，确认：
+
+- `EmpvcClassroom` 持续运行、自动启动，使用 `NT AUTHORITY\LocalService`，只监听 `127.0.0.1:3000`。
+- 正确域名 Host 下，健康接口、学生首页和教师页面均返回 200。
+- 管理员页面/API、MCP 和本机凭证保存接口返回 404；错误 Host 返回 421。
+- 未注册 `EmpvcHttps`，未新增 EMPVC 的 80/443 入站防火墙规则。
+- 运行时为 Node.js 24.21.0、Caddy 2.11.7、WinSW 2.12.0；部署记录的源码提交正确，新课堂数据库已初始化。
+
+现有 Mac 课堂数据库已在本机 `data/cloud-migration` 创建一致性备份并通过完整性检查，未上传到服务器或 GitHub。账号、照片和录音的迁移仍需要明确授权，不能将新建的空数据库视作旧课堂数据已迁移。
 
 ## 部署前确认
 
@@ -101,7 +111,7 @@ https://class.empfreeimpro.xyz/teacher.html
 http://class.empfreeimpro.xyz/teacher.html   应跳转到 HTTPS
 ```
 
-随后用教师账号建立课堂，再用更新后的真实学生安装包连接 `https://class.empfreeimpro.xyz/`，验证进入、提交声音、教师接收和再次连接。iOS/Android 旧安装包可能仍只信任内置 LAN CA，域名 HTTPS 上线并不自动更新这些包。确认手机断网时仍可录音、保存和编创，加入课堂才联网。
+随后用教师账号建立课堂，再用更新后的真实学生安装包连接 `https://class.empfreeimpro.xyz/`，验证进入、提交声音、教师接收和再次连接。iOS/Android 旧安装包可能仍只信任内置 LAN CA，域名 HTTPS 上线并不自动更新这些包。iOS 策略会规范化主机名大小写及默认 `:443`，确保原生请求的 Origin 与服务端一致；此行为已通过实际 Swift 编译测试，尚未发布新手机安装包。确认手机断网时仍可录音、保存和编创，加入课堂才联网。
 
 证书失败先检查 DNS、备案/平台拦截情况、安全组和本机防火墙、80/443 占用、时间及 Caddy 错误日志。3000 不应添加公网规则。不能通过忽略 TLS 校验、换成 HTTP 或开放全部端口来掩盖失败。
 
@@ -137,4 +147,4 @@ $env:BACKUP_DIRECTORY = 'C:\EMPVC\backups'
 - [Caddy 存储目录和数据持久化](https://caddyserver.com/docs/conventions#data-directory)
 - [Windows LocalService 身份](https://learn.microsoft.com/en-us/windows/win32/services/localservice-account)
 
-以上配置依据官方接口准备；Windows 实际服务注册、ACL、证书签发和公网课堂互通仍待部署验证。
+私有后台的实际服务注册、账户、启动、监听和页面验证已完成；公开证书签发、账号迁移、新安装包发布与真实手机课堂互通仍待完成。
