@@ -137,4 +137,4 @@ GitHub 同步前另行复核：74 项单元/接口、20 项编创与作品库、
 
 A05 生图仍为部分完成。新增官方 SDK stdio 本机桥接、教师申请自动刷新、连接活动与凭证到期检测及撤销。88 项单元/接口测试、2 项 Chrome 生图浏览器测试及正式网页构建通过；HTTP/stdio 工具与合成图片回传已经验证。
 
-真实 Platform 隧道、runtime key、教师凭证和 ChatGPT 插件授权尚未配置；真实图片生成及无人值守处理未验收。已提供 [配置及接通判据](teacher-image-tunnel.md)，本地测试或“最近互通”不能替代以上验收。
+真实 Platform 隧道已创建并初始化本机 profile，运行密钥录入入口的 8 项定向测试通过；runtime key 与教师凭证尚未保存，healthy/ready 未验证，ChatGPT 插件未授权。真实图片生成及无人值守处理未验收。已提供 [配置及接通判据](teacher-image-tunnel.md)，本地测试或“最近互通”不能替代以上验收。
