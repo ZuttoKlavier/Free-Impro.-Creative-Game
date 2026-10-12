@@ -19,12 +19,19 @@ export function initTeacherImages({ notify }) {
   dialog.querySelector('details').append(disconnect);
   dialog.querySelector('details p').textContent = '连接令牌仅处理本教师的图片申请，有效期 24 小时。ChatGPT 网页可通过安全隧道使用本机工具，无需把课堂服务器公开到互联网。连接成功后仍需启动生图处理；令牌不会自行生成图片。端点：' + new URL('/mcp/images', location.href).href;
   const guide = document.createElement('a'); guide.href = 'https://developers.openai.com/api/docs/guides/secure-mcp-tunnels'; guide.target = '_blank'; guide.rel = 'noopener noreferrer'; guide.className = 'text-button'; guide.textContent = '安全隧道配置指南'; dialog.querySelector('details').append(guide);
+  const saveLocal = document.createElement('button'); saveLocal.id = 'save-image-token-local'; saveLocal.className = 'secondary'; saveLocal.textContent = '保存到教师电脑'; saveLocal.hidden = true;
+  const localSaveStatus = document.createElement('p'); localSaveStatus.id = 'image-token-local-status'; localSaveStatus.setAttribute('role', 'status');
+  $('copy-image-token').after(saveLocal, localSaveStatus);
+  let canSaveLocally = false;
   function clearRows() { rows.clear(); claims.clear(); $('teacher-image-requests').replaceChildren(); }
   function renderConnection(status) {
     const messages = { unconfigured: '图片工具尚未配置', waiting: '凭证已创建，等待工具实际调用', recent: '图片工具最近已互通', idle: '图片工具近期没有调用，请检查连接', expired: '图片连接凭证已过期，请重新创建' };
     connection.textContent = '教师服务已连接。' + messages[status.state] + '。申请与结果自动同步；ChatGPT 生图授权和无人值守处理需另行完成。';
     connection.dataset.state = status.state;
     disconnect.disabled = status.state === 'unconfigured';
+    canSaveLocally = status.canSaveLocally === true;
+    saveLocal.disabled = !canSaveLocally;
+    if (!canSaveLocally) localSaveStatus.textContent = '请在运行课堂服务的教师电脑上，使用本机地址打开此页保存。';
   }
   async function api(path, data) {
     const response = await fetch('/api/teacher' + path, { method: data ? 'POST' : 'GET', headers: data ? { 'Content-Type': 'application/json' } : {}, body: data ? JSON.stringify(data) : undefined, signal: AbortSignal.timeout(12000) });
@@ -100,10 +107,19 @@ export function initTeacherImages({ notify }) {
   button.onclick = () => { epoch++; dialog.showModal(); refresh(); clearInterval(refreshTimer); refreshTimer = setInterval(() => { if (!document.hidden) refresh(); }, 5000); };
   $('close-image-settings').onclick = () => dialog.close();
   $('refresh-image-requests').onclick = refresh;
-  $('issue-image-token').onclick = () => run(async () => { const opening = epoch; const result = await api('/image-mcp-token', {}); if (dialog.open && opening === epoch) { $('image-mcp-token').value = result.token; $('image-mcp-token').hidden = false; $('copy-image-token').hidden = false; } });
+  $('issue-image-token').onclick = () => run(async () => { const opening = epoch; const result = await api('/image-mcp-token', {}); if (dialog.open && opening === epoch) { $('image-mcp-token').value = result.token; $('image-mcp-token').hidden = false; $('copy-image-token').hidden = false; saveLocal.hidden = false; localSaveStatus.textContent = canSaveLocally ? '点击保存到教师电脑，随后等待图片工具连接。' : '请在运行课堂服务的教师电脑上，使用本机地址打开此页保存。'; } });
+  saveLocal.onclick = () => run(async () => {
+    if (!canSaveLocally) throw new Error('请在运行课堂服务的教师电脑上，用本机地址打开教师端后保存。');
+    const opening = epoch;
+    const result = await api('/image-mcp-save-local', { token: $('image-mcp-token').value });
+    if (!dialog.open || opening !== epoch) return;
+    renderConnection(result); clearToken();
+    localSaveStatus.textContent = '凭证已保存到教师电脑，等待图片工具实际连接。';
+    notify('凭证已保存到教师电脑。');
+  });
   disconnect.onclick = () => run(async () => { renderConnection(await api('/image-mcp-disconnect', {})); clearToken(); notify('图片工具已断开，学生申请和已保存图片保留。'); });
   $('copy-image-token').onclick = () => navigator.clipboard.writeText($('image-mcp-token').value).then(() => notify('连接令牌已复制。')).catch(() => notify('请手动复制令牌。', true));
-  function clearToken() { $('image-mcp-token').value = ''; $('image-mcp-token').hidden = true; $('copy-image-token').hidden = true; }
+  function clearToken() { $('image-mcp-token').value = ''; $('image-mcp-token').hidden = true; $('copy-image-token').hidden = true; saveLocal.hidden = true; localSaveStatus.textContent = ''; }
   dialog.addEventListener('close', () => { epoch++; clearInterval(refreshTimer); clearToken(); clearRows(); connection.textContent = ''; });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && dialog.open) refresh(); });
   // Register tools only in the teacher bundle, and preserve server authorization.

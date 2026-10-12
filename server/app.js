@@ -3,10 +3,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, randomInt, scrypt, timingSafeEqual, createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { validateImage } from './images.js';
 import { createImageWorkflow } from './image-workflow.js';
 import { serveImageMcp } from './image-mcp.js';
+import { saveLocalImageToken } from './local-image-token.js';
 import { createLayoutStore } from './layout.js';
 import { createArrangementStore } from './arrangement.js';
 import { createPerformanceStore } from './performance.js';
@@ -16,6 +18,14 @@ const error = (status, message) => Object.assign(new Error(message), { status })
 const clean = (value, min, max) => typeof value === 'string' && value.trim().length >= min && value.trim().length <= max;
 const publicUser = u => ({ id: u.id, username: u.username, name: u.name, role: u.role });
 const digest = token => createHash('sha256').update(token).digest('hex');
+
+export function canSaveLocalImageToken(req) {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return false;
+  try {
+    // Do not trust forwarding headers to grant access to the teacher computer.
+    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL('http://' + req.headers.host).hostname);
+  } catch { return false; }
+}
 
 // Accept the bounded mono PCM WAV exported by the student client, checking real bytes.
 export function validateWav(encoded) {
@@ -27,7 +37,7 @@ export function validateWav(encoded) {
   return { audio, duration: length / (rate * 2) };
 }
 
-export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, performanceNow = Date.now, imageNow = Date.now } = {}) {
+export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, performanceNow = Date.now, imageNow = Date.now, imageTokenFile = resolve(fileURLToPath(new URL('../', import.meta.url)), process.env.FREE_IMPRO_IMAGE_TOKEN_FILE || 'data/image-mcp/teacher.token') } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
@@ -162,7 +172,16 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         throw error(405, '不支持的申请操作。');
       }
       if (req.method === 'POST' && path === '/api/image-mcp-token') { send(201, images.issueToken(user)); return; }
-      if (req.method === 'GET' && path === '/api/image-mcp-connection') { send(200, images.connectionStatus(user)); return; }
+      if (req.method === 'GET' && path === '/api/image-mcp-connection') { send(200, { ...images.connectionStatus(user), canSaveLocally: canSaveLocalImageToken(req) }); return; }
+      if (req.method === 'POST' && path === '/api/image-mcp-save-local') {
+        if (user.role !== 'teacher') throw error(403, '只有教师可以保存图片连接凭证。');
+        if (!canSaveLocalImageToken(req)) throw error(403, '请在运行课堂服务的教师电脑上，用本机地址打开教师端后保存。');
+        const data = await body(req);
+        if (Object.keys(data).length !== 1 || !Object.hasOwn(data, 'token')) throw error(400, '请使用教师设置中的连接令牌。');
+        if (images.authenticateToken(data.token).id !== user.id) throw error(403, '请保存当前教师自己的连接令牌。');
+        saveLocalImageToken(data.token, imageTokenFile);
+        send(200, { saved: true, ...images.connectionStatus(user), canSaveLocally: true }); return;
+      }
       if (req.method === 'POST' && path === '/api/image-mcp-disconnect') { send(200, images.disconnect(user)); return; }
       const imageJob = /^\/api\/image-jobs\/([a-f0-9-]{36})\/(photo|reference|result|context|claim|complete|reject|conversation)$/.exec(path);
       if (imageJob) {
