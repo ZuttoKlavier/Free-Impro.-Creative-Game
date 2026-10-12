@@ -1,6 +1,6 @@
 # EV生图储存库与学生专属对话
 
-更新：2026-10-10。当前方案使用教师的 ChatGPT Plus 普通网页聊天；软件不自动调用付费图像 API。
+更新：2026-10-12。当前方案使用教师的 ChatGPT Plus 普通网页聊天；软件不自动调用付费图像 API。
 
 ## 使用流程
 
@@ -38,15 +38,15 @@
 
 2026-10-11 增加官方 SDK stdio 本机桥接、教师自动刷新与连接活动检测，可交由 OpenAI 官方安全隧道访问，无需公开课堂端口。详见 [本机隧道连接说明](teacher-image-tunnel.md)。
 
-**尚未完成：**真实 Platform 隧道配置与 ChatGPT 插件授权、实际图片生成、无人值守网页操作与自动结果回传。本地 MCP 测试成功不证明这些连接已经完成。Plus 登录不能用作官方图像 API 授权，见 [官方限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)；网页版插件安装方式见 [官方 MCP 指南](https://learn.chatgpt.com/docs/extend/mcp)。不保存 Plus 密码、网页 Cookie 或访问令牌到课堂软件。
+**当前进度：**真实教师凭证、官方隧道及 ChatGPT 插件已连接验证；一次模拟学生的 Plus 网页生成、固定 EV 对话绑定与官方 SDK 本机回传通过，HTTPS 结果哈希一致。隧道停运后已恢复为官方本机托管运行，远程带参数读取及不存在申请的领取校验通过。**仍待完成：**实际图片远程绑定/回传、无人值守网页处理、重启后隧道自动运行，以及真实学生照片、统一风格/透明背景和原生设备保存验收；本次恢复未重新生成图片。详见[本机隧道及实测记录](teacher-image-tunnel.md)。Plus 登录不能用作官方图像 API 授权，见 [官方限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)；网页版插件安装方式见 [官方 MCP 指南](https://learn.chatgpt.com/docs/extend/mcp)。不保存 Plus 密码、网页 Cookie 或访问令牌到课堂软件。
 
-## 本轮验证
+## 2026-10-10 自动化验证（历史记录）
 
 - Node 单元/接口全套 86 项通过；补充修改后的 HTTPS 与生图接口专项 8 项通过。
 - Chrome 图像编辑、注册申请、教师对话绑定与回传、iOS 离线页面专项共 12 项通过。
 - MCP 使用官方客户端连接真实临时服务，覆盖五个工具、参考图、领取重试、回传、令牌轮换与过期。
 - 正式网页构建、iOS 离线页面生成及通用 iOS Simulator 未签名源码构建通过。没有安装或验收真机，也没有生成新的 Android APK。
 - 新增依赖的生产安全检查未发现已知漏洞。
-- ChatGPT 网页已保存并重新打开核对 EV 项目说明。当前项目无聊天，本地没有注册生图学生名单，所以没有创建真实学生对话或上传学生照片。截图只留本地 `output/connection-check/ev-image-project-rules.jpg`。
+- 当时已在 ChatGPT 网页保存并重新打开核对 EV 项目说明，项目尚无聊天或注册生图学生名单，没有创建学生对话或上传学生照片。截图只留本地 `output/connection-check/ev-image-project-rules.jpg`；2026-10-12 的模拟学生对话与实际生成另见[后续实测](teacher-image-tunnel.md)。
 
-自动化测试使用合成参考与结果图片，没有调用 ChatGPT 生图，也未将测试对话地址提交到 ChatGPT 网页。
+以上当次自动化测试使用合成参考与结果图片，没有调用 ChatGPT 生图或提交测试对话地址；不能覆盖或否定随后的一次实际 Plus 网页生成和本机回传。

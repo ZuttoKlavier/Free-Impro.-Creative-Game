@@ -129,3 +129,13 @@ ChatGPT 插件草稿已选择“隧道”、填写真实 ID，并设置本机桥
 ChatGPT 插件远程绑定请求两次出现 HTTP 传输错误，状态与列表读取仍成功。没有把失败当作回传成功；随后使用同一教师凭证、同一领取编号和官方 SDK 的本机 stdio 工具完成实际绑定及 `return_generated_image`。教师插件列表确认该模拟申请 completed；模拟学生通过受信任 HTTPS 取得结果图片和固定形象，均与回传文件的 SHA-256 完全一致，hasAvatar=true、今日额度=0。结果为 254812 字节，SHA-256 为 `379e9c93cc658521e80d7f94e4b54d3e4592b9cd8538c4ee975951e17cb750da`。模拟记录及图片保留供教师查看，凭证、会话、私人对话地址和图片文件未提交 Git。
 
 本次验证的是 Plus 网页生成、人工编排的下载与本机 MCP 回传。远程插件写入、无人值守生成、安卓/iOS 真机本地保存仍未验收，automaticGeneration 保持 false。正常工作包括模拟申请、一次实际生成、兼容修复、结果预览、定向验证、部署和回传校验；没有新增仅因中断而发生的恢复开销。Token 统计不可用。
+
+### 2026-10-12：官方本机托管运行与远程参数核验
+
+继续核对时插件状态工具返回不可用；只读进程检查确认官方隧道已经停止，旧运行日志此前出现网络错误和超时，但没有本次退出原因的记录。未据此改动绑定代码。沿用同一隧道、现有 runtime key 文件引用及教师专用凭证，使用官方 `runtimes connect` 创建本机托管别名 `ev-teacher-images`；原 profile 备份并保留，新托管 profile 为 `ev-teacher-images-managed`。没有创建新远端隧道、扩大权限或公开课堂端口。
+
+托管启动返回后，再执行 `runtimes status ev-teacher-images`：process_running、healthy、ready 均为 true；结合进程编号的 `health --require-control-plane-poll` 检查退出 0，实际轮询通过。ChatGPT 插件的状态工具随即成功返回 recent，待处理和处理中均为零，automaticGeneration 仍为 false。官方[隧道故障排查](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)要求在测试插件时保持运行客户端健康，此次进程停止是当前不可用的直接原因；不能据此断定此前两次绑定失败的原因。
+
+为确认有参远程调用抵达本机，用只读数据库检查过、确实不存在的 UUID 分别调用 `get_image_request` 和 `claim_image_request`，均收到业务层“申请不存在”，不再是 HTTP 传输错误。复核该编号仍不存在，现有一条 completed 申请的数量和状态不变。此为远程读取和领取错误路径核验，不计为实际图片远程绑定或回传成功；没有生成或回传新图片。操作只更新正常工具连接活动，未领取现有学生申请。
+
+本次运行、健康及定向核验记录位于本机受保护且被 Git 忽略的 `data/image-mcp/runtime-recovery-2026-10-12/`。当前由官方本机托管运行，重启电脑后的自动启动仍未配置或验收；停止、查看与恢复使用同一官方别名管理方式。已有一次 Plus 生成和本机回传结果继续保留，实际远程图片写入、无人值守及真机保存仍待验收。
