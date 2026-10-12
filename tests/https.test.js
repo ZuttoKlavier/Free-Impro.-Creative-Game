@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpsRequest } from 'node:https';
@@ -75,4 +75,33 @@ test('HTTP setup exposes only instructions and the public CA; HTTPS account cook
   const info = JSON.parse((await getHTTPS(origin, '/connection.json')).text);
   assert.equal(info.classroomUrl, app.classroomUrl);
   assert.match((await getHTTPS(origin, '/connection')).text, /测试麦克风权限/);
+});
+
+test('HTTPS teacher token saving allows the local page and rejects LAN hosts and forged forwarding headers', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'free-impro-https-image-save-'));
+  const certs = join(root, 'certs'), tokenFile = join(root, 'data/image-mcp/teacher.token');
+  mkdirSync(join(root, 'data'));
+  prepareCertificates({ directory: certs, hosts: ['127.0.0.1', 'localhost', '192.0.2.5'] });
+  const app = await startLanServer({ certDirectory: certs, distDirectory, dbPath: ':memory:', imageTokenFile: tokenFile, port: 0, setupPort: 0, bind: '127.0.0.1' });
+  t.after(async () => { await app.close(); rmSync(root, { recursive: true, force: true }); });
+  const origin = app.classroomUrl.slice(0, -1), authority = readFileSync(join(certs, 'classroom-ca.crt'));
+  let cookie = '';
+  const api = async (path, data, host = new URL(origin).host, extraHeaders = {}) => {
+    const response = await getHTTPS(origin, '/api/teacher' + path, { ca: authority, method: data ? 'POST' : 'GET', headers: { Host: host, Origin: 'https://' + host, Cookie: cookie, 'Content-Type': 'application/json', ...extraHeaders }, body: data ? JSON.stringify(data) : undefined });
+    if (response.headers['set-cookie']) cookie = response.headers['set-cookie'][0].split(';')[0];
+    return { status: response.status, data: JSON.parse(response.text) };
+  };
+  assert.equal((await api('/register', { username: 'https_image_teacher', password: 'password123', name: '配置测试', role: 'teacher' })).status, 200);
+  const localHost = 'localhost:' + new URL(origin).port;
+  assert.equal((await api('/image-mcp-connection', undefined, localHost)).data.canSaveLocally, true);
+  const { token } = (await api('/image-mcp-token', {}, localHost)).data;
+  const saved = await api('/image-mcp-save-local', { token }, localHost);
+  assert.equal(saved.status, 200); assert.equal(saved.data.state, 'waiting'); assert.equal(saved.data.lastToolAt, null);
+  assert.equal(readFileSync(tokenFile, 'utf8'), token);
+  if (process.platform !== 'win32') assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
+  const lanHost = '192.0.2.5:' + new URL(origin).port;
+  const forwarded = { 'X-Forwarded-For': '127.0.0.1', 'X-Forwarded-Host': localHost, Forwarded: 'for=127.0.0.1;host=' + localHost };
+  assert.equal((await api('/image-mcp-connection', undefined, lanHost, forwarded)).data.canSaveLocally, false);
+  assert.equal((await api('/image-mcp-save-local', { token }, lanHost, forwarded)).status, 403);
+  assert.equal(readFileSync(tokenFile, 'utf8'), token);
 });

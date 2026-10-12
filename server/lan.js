@@ -20,7 +20,7 @@ function staticFiles(directory, prefix = '') {
   return files;
 }
 
-export async function startLanServer({ certDirectory = 'data/https', distDirectory = 'dist', dbPath = 'data/classroom.sqlite', port = 8443, setupPort = 8080, bind = '0.0.0.0' } = {}) {
+export async function startLanServer({ certDirectory = 'data/https', distDirectory = 'dist', dbPath = 'data/classroom.sqlite', imageTokenFile, port = 8443, setupPort = 8080, bind = '0.0.0.0' } = {}) {
   const dir = resolve(certDirectory);
   if (!existsSync(join(dir, 'config.json'))) throw new Error('尚未准备 HTTPS 证书，请先运行 npm run setup:https。');
   if (!existsSync(join(distDirectory, 'index.html'))) throw new Error('尚未生成课堂页面，请先运行 npm run build。');
@@ -30,7 +30,7 @@ export async function startLanServer({ certDirectory = 'data/https', distDirecto
   if (Date.parse(certificate.validTo) <= Date.now() || !certificate.verify(authority.publicKey) || !certificate.checkPrivateKey(createPrivateKey(key))) throw new Error('课堂证书已过期或不匹配，请重新运行 npm run setup:https。');
   if (!config.hosts.includes(config.preferredHost) || config.hosts.some(host => !(isIP(host) ? certificate.checkIP(host) : certificate.checkHost(host)))) throw new Error('课堂地址与证书不匹配，请重新运行 npm run setup:https。');
   const files = staticFiles(resolve(distDirectory));
-  const app = createApp({ dbPath, secureCookies: true });
+  const app = createApp({ dbPath, secureCookies: true, imageTokenFile });
   const api = app.server.listeners('request')[0];
   let securePage, setupPage, connection;
   function serve(secure, req, res) {

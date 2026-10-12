@@ -81,3 +81,27 @@ test('teacher automatically receives requests and tool status without discarding
     await expect(page.locator('[data-materials]')).toHaveCount(0);
   } finally { await mcp?.close(); await context.close(); }
 });
+
+test('disabled local saving explains the restriction and offers a clean local teacher URL', async ({ page }) => {
+  const headers = { Origin: process.env.TEST_APP_ORIGIN };
+  await page.request.post('/api/teacher/register', { headers, data: { username: 'local_save_' + crypto.randomUUID().slice(0, 8), name: '配置测试', password: 'password123', role: 'teacher' } });
+  let availability = false;
+  await page.route('**/api/teacher/image-mcp-connection', async route => {
+    const response = await route.fetch(), status = await response.json();
+    await route.fulfill({ response, json: { ...status, canSaveLocally: availability } });
+  });
+  await page.goto('/teacher.html?class=123456#configuration');
+  await page.locator('#image-settings').click();
+  await page.getByText('MCP 连接设置', { exact: true }).click();
+  await expect(page.locator('#image-token-local-status')).toContainText('课堂服务未确认本机连接');
+  await expect(page.locator('#open-local-teacher-images')).toBeVisible();
+  await expect(page.locator('#open-local-teacher-images')).toHaveAttribute('href', new URL('/teacher.html', process.env.TEST_APP_ORIGIN).href);
+  await page.locator('#issue-image-token').click();
+  await expect(page.locator('#save-image-token-local')).toBeDisabled();
+  availability = true;
+  await page.locator('#refresh-image-requests').click();
+  await expect(page.locator('#save-image-token-local')).toBeEnabled();
+  await expect(page.locator('#open-local-teacher-images')).toBeHidden();
+  await expect(page.locator('#image-token-local-status')).toContainText('点击保存到教师电脑');
+  // No fixture credential is saved to the production teacher file.
+});
