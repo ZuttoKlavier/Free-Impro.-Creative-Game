@@ -8,6 +8,8 @@
 
 ## 本地启动
 
+2026-10-13 新增[后台管理员控制台](docs/admin-console.md)：独立管理员登录，跨教师查看及管理服务器账号、课堂、作品和图片申请，支持搜索、受保护素材下载与导出。高级数据库浏览接入 [sqlite-web](https://github.com/coleifer/sqlite-web) 0.8.2；账号和课堂继续使用原 SQLite，不搬迁数据。入口为 `/api/admin/console`，本机首次登录信息保存在受保护的 `data/admin/initial-login.txt`。学生尚未上传的离线作品仍保存在各自设备中。
+
 需要 Node.js 24.15+（使用内置 SQLite）。
 
 ```sh

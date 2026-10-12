@@ -1,0 +1,43 @@
+import { test, expect } from '@playwright/test';
+
+test('administrator console manages a teacher through real HTTP and browses live sqlite-web', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/api/admin/console');
+  await page.getByLabel('管理员账号', { exact: true }).fill('browser_admin');
+  await page.locator('#login-password').fill('synthetic-admin-password-123');
+  await page.getByRole('button', { name: '登录后台', exact: true }).click();
+  await expect(page.locator('#admin-shell')).toBeVisible();
+  await page.getByRole('button', { name: '教师管理', exact: true }).click();
+  await expect(page.locator('#records-body')).toContainText('browser_teacher');
+  await page.getByRole('button', { name: '修改姓名：测试教师', exact: true }).click();
+  await page.locator('#action-dialog input').fill('网页修改的测试教师');
+  await page.locator('#dialog-confirm').click();
+  await expect(page.locator('#records-body')).toContainText('网页修改的测试教师');
+  const headers = { Origin: 'http://127.0.0.1:4307' };
+  const teacher = await page.request.post('/api/teacher/login', { headers, data: { username: 'browser_teacher', password: 'synthetic-teacher-password-123' } });
+  expect(teacher.status()).toBe(200);
+  expect((await teacher.json()).user.name).toBe('网页修改的测试教师');
+  const me = await page.request.get('/api/admin/me');
+  expect(me.status()).toBe(200);
+  const exportResponse = await page.request.get('/api/admin/export?table=users&role=teacher');
+  expect(exportResponse.status()).toBe(200);
+  const exported = await exportResponse.json();
+  expect(exported.rows).toHaveLength(1);
+  expect(exported.rows[0].name).toBe('网页修改的测试教师');
+  expect(exported.rows[0].password).toBeUndefined();
+  await page.getByRole('button', { name: '数据库浏览', exact: true }).click();
+  const database = page.frameLocator('#database-frame');
+  await expect(database.getByText('users', { exact: true }).first()).toBeVisible({ timeout: 20000 });
+  await expect.poll(async () => {
+    const frame = page.frames().find(frame => frame.url().includes('/api/admin/database/'));
+    return frame ? frame.evaluate(() => typeof window.App?.initialize) : 'missing';
+  }).toBe('function');
+  const content = await page.request.get('/api/admin/database/users/content/');
+  expect(content.status()).toBe(200);
+  expect(await content.text()).toContain('网页修改的测试教师');
+  await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '管理员登录', exact: true })).toBeVisible();
+  expect((await page.request.get('/api/admin/database/')).status()).toBe(401);
+  expect(errors).toEqual([]);
+});

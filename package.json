@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "admin:setup": "node scripts/admin-setup.js",
+    "admin:database:install": "node scripts/install-admin-database.js",
+    "test:admin:browser": "playwright test --config playwright.admin.config.js",
     "classroom:background": "node scripts/classroom-service.js start",
     "classroom:status": "node scripts/classroom-service.js status",
     "classroom:stop": "node scripts/classroom-service.js stop",

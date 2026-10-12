@@ -59,6 +59,7 @@ export async function startLanServer({ certDirectory = 'data/https', distDirecto
   const close = async () => {
     if (closed) return; closed = true;
     await Promise.all([server, setupServer].map(item => new Promise(resolve => { if (!item.listening) return resolve(); item.close(resolve); item.closeAllConnections(); })));
+    app.closeAdmin();
     app.db.close();
   };
   try {

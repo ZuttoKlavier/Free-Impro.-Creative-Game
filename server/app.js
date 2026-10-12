@@ -12,6 +12,7 @@ import { saveLocalImageToken } from './local-image-token.js';
 import { createLayoutStore } from './layout.js';
 import { createArrangementStore } from './arrangement.js';
 import { createPerformanceStore } from './performance.js';
+import { createAdmin } from './admin.js';
 
 const hashPassword = promisify(scrypt);
 const error = (status, message) => Object.assign(new Error(message), { status });
@@ -83,10 +84,12 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     for await (const chunk of req) { size += chunk.length; if (size > 1300000) throw error(413, '提交内容过大。'); chunks.push(chunk); }
     try { const value = JSON.parse(Buffer.concat(chunks).toString()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(); return value; } catch { throw error(400, '请求内容无效。'); }
   }
+  const admin = createAdmin({ db, dbPath, secureCookies, body, layout, performance, images });
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     try {
+      if (await admin.handle(req, res)) return;
       const incomingPath = new URL(req.url, 'http://local').pathname;
       if (incomingPath === '/mcp/images') { await serveImageMcp(req, res, images); return; }
       req.clientRole = /^\/api\/(student|teacher)\//.exec(incomingPath)?.[1];
@@ -153,7 +156,8 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
           run('INSERT INTO users VALUES(?,?,?,?,?,?)', ...Object.values(user));
         } else {
           const check = await hashPassword(data.password, user?.salt || 'not-an-account', 64);
-          if (!user || !timingSafeEqual(check, Buffer.from(user.password, 'hex'))) throw error(401, '账号或密码不正确。');
+          const current = user && one('SELECT password FROM users WHERE id=?', user.id);
+          if (!user || current?.password !== user.password || !timingSafeEqual(check, Buffer.from(user.password, 'hex'))) throw error(401, '账号或密码不正确。');
           if (requiredRole && user.role !== requiredRole) throw error(403, requiredRole === 'teacher' ? '请使用教师账号登录教师端。' : '请使用学生账号登录学生端。');
         }
         const old = session(req); if (old.token) run('DELETE FROM sessions WHERE token=?', old.token);
@@ -301,5 +305,6 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     } catch (e) { if (!res.headersSent) send(e.status || 500, { error: e.status ? e.message : '服务暂时无法完成操作，请重试。' }); else res.end(); if (!e.status) console.error(e); }
   });
   server.requestTimeout = 15000;
-  return { server, db };
+  server.on('close', admin.close);
+  return { server, db, closeAdmin: admin.close };
 }
