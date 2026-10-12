@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <id>EmpvcHttps</id>
+  <name>EMPVC HTTPS</name>
+  <description>EMPVC public HTTPS reverse proxy and automatic certificate renewal, managed by WinSW 2.x.</description>
+  <executable>C:\EMPVC\runtime\caddy\caddy.exe</executable>
+  <arguments>run --config "C:\EMPVC\services\Caddyfile" --adapter caddyfile</arguments>
+  <workingdirectory>C:\EMPVC</workingdirectory>
+  <env name="CLASSROOM_DOMAIN" value="class.empfreeimpro.xyz" />
+  <env name="TEMP" value="C:\EMPVC\temp" />
+  <env name="TMP" value="C:\EMPVC\temp" />
+  <depend>EmpvcClassroom</depend>
+  <startmode>Automatic</startmode>
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalService</user>
+  </serviceaccount>
+  <stoptimeout>15 sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <logpath>C:\EMPVC\logs\https</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

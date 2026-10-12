@@ -1,0 +1,17 @@
+{
+    admin off
+    persist_config off
+    storage file_system {
+        root C:/EMPVC/caddy-data
+    }
+    servers {
+        protocols h1 h2
+    }
+}
+
+# Caddy obtains a public certificate, renews it, and redirects HTTP to HTTPS.
+# No filesystem serving, environment dump, access log, or local CA is enabled.
+{$CLASSROOM_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000
+}

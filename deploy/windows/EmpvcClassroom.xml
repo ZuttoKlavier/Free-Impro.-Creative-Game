@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <id>EmpvcClassroom</id>
+  <name>EMPVC Classroom</name>
+  <description>EMPVC classroom backend; private loopback listener managed by WinSW 2.x.</description>
+  <executable>C:\EMPVC\runtime\node\node.exe</executable>
+  <arguments>"C:\EMPVC\server\cloud.js"</arguments>
+  <workingdirectory>C:\EMPVC</workingdirectory>
+  <env name="NODE_ENV" value="production" />
+  <env name="PUBLIC_ORIGIN" value="https://class.empfreeimpro.xyz" />
+  <env name="CLOUD_BIND" value="127.0.0.1" />
+  <env name="CLOUD_PORT" value="3000" />
+  <env name="FREE_IMPRO_DB" value="C:\EMPVC\data\classroom.sqlite" />
+  <env name="DIST_DIRECTORY" value="C:\EMPVC\dist" />
+  <env name="TEMP" value="C:\EMPVC\temp" />
+  <env name="TMP" value="C:\EMPVC\temp" />
+  <startmode>Automatic</startmode>
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalService</user>
+  </serviceaccount>
+  <stoptimeout>15 sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <logpath>C:\EMPVC\logs\app</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>

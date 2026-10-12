@@ -2,6 +2,11 @@ import Foundation
 
 struct StudentPolicy {
     let origin: URL
+    // Only this deployment uses the OS public CA store. All classroom LAN
+    // endpoints retain the bundled classroom CA and hostname validation.
+    var usesSystemTrust: Bool {
+        origin.host?.lowercased() == "class.empfreeimpro.xyz" && (origin.port ?? 443) == 443
+    }
     init?(_ text: String) {
         guard var parts = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
               parts.scheme == "https", let host = parts.host, !host.isEmpty,

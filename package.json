@@ -10,6 +10,8 @@
     "classroom:background": "node scripts/classroom-service.js start",
     "classroom:status": "node scripts/classroom-service.js status",
     "classroom:stop": "node scripts/classroom-service.js stop",
+    "cloud": "node server/cloud.js",
+    "cloud:backup": "node scripts/cloud-backup.js",
     "mcp:images": "node scripts/image-mcp.js",
     "mcp:images:check": "node scripts/image-mcp.js --check",
     "mcp:images:configure": "node scripts/image-mcp.js --configure",

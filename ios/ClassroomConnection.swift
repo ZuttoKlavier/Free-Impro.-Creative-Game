@@ -104,7 +104,13 @@ final class ClassroomConnection: NSObject, URLSessionDelegate, URLSessionTaskDel
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               challenge.protectionSpace.host == policy?.origin.host, challenge.protectionSpace.port == (policy?.origin.port ?? 443),
-              let trust = challenge.protectionSpace.serverTrust,
+              let trust = challenge.protectionSpace.serverTrust else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+        if policy?.usesSystemTrust == true {
+            // Default handling validates the public chain, expiry and hostname.
+            // Never accept a classroom/self-signed certificate for this domain.
+            completionHandler(.performDefaultHandling, nil); return
+        }
+        guard
               let url = Bundle.main.url(forResource: "classroom-ca", withExtension: "der"), let data = try? Data(contentsOf: url), let ca = SecCertificateCreateWithData(nil, data as CFData) else { completionHandler(.cancelAuthenticationChallenge, nil); return }
         SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, challenge.protectionSpace.host as CFString))
         SecTrustSetAnchorCertificates(trust, [ca] as CFArray); SecTrustSetAnchorCertificatesOnly(trust, true)
