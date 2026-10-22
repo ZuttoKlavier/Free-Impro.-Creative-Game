@@ -1,5 +1,6 @@
 import { resizeSteps } from './rhythm-data.js';
-import { stretchBuffer } from './time-stretch.js';
+import { prepareAudioSession, resumeAudioContext } from './audio-session.js';
+import { stepDuration, stepTime } from './rhythm-timing.js';
 const STEPS_PER_BAR = 16;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));
 const resizePattern = (pattern, bars) => resizeSteps(pattern, bars * STEPS_PER_BAR);
@@ -45,7 +46,7 @@ function commitPending(model, includeBars) {
 
 /** One AudioContext clock for every voice; no per-student media elements. */
 export class Sequencer {
-  constructor({ onTick, onChange, onTrigger, onBoundary, context, autoSchedule = true } = {}) {
+  constructor({ onTick, onChange, onTrigger, onBoundary, context, autoSchedule = true, volume = .8, limiter = true } = {}) {
     this.onTick = onTick;
     this.onChange = onChange;
     this.onTrigger = onTrigger;
@@ -56,7 +57,8 @@ export class Sequencer {
     this._model = { bars: 1, pendingBars: null, tracks: new Map() };
     this._bpm = 100;
     this._swing = 0;
-    this._volume = 0.8;
+    this._volume = clamp(volume, 0, 1);
+    this._useLimiter = limiter;
     this._playing = false;
     this._loop = 0;
     this._step = 0;
@@ -82,7 +84,7 @@ export class Sequencer {
       this._master = this.context.createGain();
       this._master.gain.value = this._volume;
       // A shared limiter protects the output when many students strike together.
-      if (this.context.createDynamicsCompressor) {
+      if (this._useLimiter && this.context.createDynamicsCompressor) {
         this._limiter = this.context.createDynamicsCompressor();
         Object.assign(this._limiter.threshold, { value: -3 });
         Object.assign(this._limiter.knee, { value: 0 });
@@ -107,9 +109,7 @@ export class Sequencer {
     if (this._playing) {
       const next = this._current ? this._step + 1 : 0;
       remaining = this._current ? this._current.duration * (1 - fraction) : Math.max(0, this._startTime - now);
-      const count = steps - next;
-      const even = Math.floor(count / 2) + (count % 2 && next % 2 === 0 ? 1 : 0);
-      remaining += (60 / this._bpm / 4) * (even * (1 + this._swing) + (count - even) * (1 - this._swing));
+      remaining += stepTime(steps, this._bpm, this._swing) - stepTime(next, this._bpm, this._swing);
     }
     return {
       playing: this._playing, bpm: this._bpm, swing: this._swing, volume: this._volume,
@@ -231,8 +231,10 @@ export class Sequencer {
   async play() {
     if (this._playing) return;
     const generation = ++this._generation;
+    const prepared = prepareAudioSession('playback');
     const context = await this.ready();
-    if (context.state === 'suspended') await context.resume();
+    await Promise.all([prepared, resumeAudioContext(context)]);
+    await resumeAudioContext(context);
     if (generation !== this._generation || this._disposed) return;
     commitPending(this._model, true);
     this._playing = true;
@@ -294,7 +296,7 @@ export class Sequencer {
     return track;
   }
 
-  _duration(step) { return (60 / this._bpm / 4) * (step % 2 === 0 ? 1 + this._swing : 1 - this._swing); }
+  _duration(step) { return stepDuration(step, this._bpm, this._swing); }
 
   _gainFor(track) {
     if (!this._gains.has(track.id)) {
@@ -371,15 +373,17 @@ export class Sequencer {
         const source = this.context.createBufferSource();
         const length = typeof track.pattern[step] === 'number' ? track.pattern[step] : 1;
         const heldDuration = Array.from({ length }, (_, i) => this._duration(step + i)).reduce((a, b) => a + b, 0);
-        source.buffer = length > 1 ? stretchBuffer(this.context, track.buffer, heldDuration) : track.buffer;
+        // Timing only gates the original recording: play its prefix at the
+        // original rate, then leave any unused portion of the block silent.
+        source.buffer = track.buffer;
+        const duration = Number.isFinite(track.buffer.duration) ? Math.min(track.buffer.duration, heldDuration) : heldDuration;
         source.connect(this._gainFor(track));
         if (!this._sources.has(track.id)) this._sources.set(track.id, new Set());
         this._sources.get(track.id).add(source);
         source.onended = () => { this._sources.get(track.id)?.delete(source); source.disconnect(); };
-        source.start(time);
-        // Preserve the buffer actually scheduled, so delayed UI frames and live
-        // tempo edits cannot change the duration of a voice already sounding.
-        this._sourceNotes.set(source, { step, length, time, duration: source.buffer.duration, loop });
+        source.start(time, 0, duration);
+        // Keep the actual gate scheduled, including after live tempo edits.
+        this._sourceNotes.set(source, { step, length, time, duration, loop });
         event.sources.push({ id: track.id, source });
         event.triggers.push(track.id);
       }

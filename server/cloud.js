@@ -45,25 +45,45 @@ function buildFiles(directory) {
 
 // TLS belongs to the same-host reverse proxy. Forwarding headers never grant
 // origin, authentication or local teacher-computer privileges to this backend.
-export async function startCloudServer({ publicOrigin = process.env.PUBLIC_ORIGIN, distDirectory = 'dist', dbPath = 'data/classroom.sqlite', bind = '127.0.0.1', port = 3000, imageTokenFile } = {}) {
+export async function startCloudServer({ publicOrigin = process.env.PUBLIC_ORIGIN, adminOrigin = process.env.ADMIN_ORIGIN, distDirectory = 'dist', dbPath = 'data/classroom.sqlite', bind = '127.0.0.1', port = 3000, imageTokenFile } = {}) {
   const origin = validatePublicOrigin(publicOrigin);
+  let administratorOrigin;
+  if (adminOrigin !== undefined) {
+    try { administratorOrigin = validatePublicOrigin(adminOrigin); }
+    catch { throw new Error('ADMIN_ORIGIN 必须是规范的公开 HTTPS 来源，不能包含路径、端口、账号或本地地址。'); }
+    if (administratorOrigin.host === origin.host) throw new Error('ADMIN_ORIGIN 必须使用与课堂 PUBLIC_ORIGIN 不同的域名。');
+  }
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 必须是 0–65535 的整数。');
   if (typeof bind !== 'string' || !isIP(bind)) throw new Error('BIND 必须是明确的监听 IP 地址。');
   const files = buildFiles(resolve(distDirectory));
-  const app = createApp({ dbPath, secureCookies: true, ...(imageTokenFile ? { imageTokenFile } : {}) });
+  const app = createApp({ dbPath, secureCookies: true, adminPreviewFiles: files, ...(imageTokenFile ? { imageTokenFile } : {}) });
   const api = app.server.listeners('request')[0];
   const server = createServer((req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
     const send = (status, body) => { res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': Buffer.byteLength(body) }); res.end(req.method === 'HEAD' ? undefined : body); };
-    if (req.headers.host !== origin.host) { send(421, '请使用配置的课堂域名。'); return; }
+    const administratorHost = administratorOrigin !== undefined && req.headers.host === administratorOrigin.host;
+    if (!administratorHost && req.headers.host !== origin.host) { send(421, '请使用配置的服务域名。'); return; }
     // Reject alternate/absolute request targets and ambiguous encoded paths.
     const target = req.url?.split('?')[0];
     if (!target?.startsWith('/') || target.startsWith('//') || /\\|%2e|%2f|%5c|(?:^|\/)\.{1,2}(?:\/|$)|%(?![a-f0-9]{2})/i.test(target)) { send(400, '无效地址。'); return; }
-    if (req.headers.origin !== undefined && req.headers.origin !== origin.origin) { send(403, '请从本应用页面发起操作。'); return; }
-    // Administrator maintenance and the local stdio image bridge are configured
-    // separately. Never delegate these routes to the shared business app.
+    const requestOrigin = administratorHost ? administratorOrigin : origin;
+    const appleCallback = !administratorHost && req.method === 'POST' && target === '/api/student/auth/callback/apple' && req.headers.origin === 'https://appleid.apple.com';
+    if (req.headers.origin !== undefined && req.headers.origin !== requestOrigin.origin && !appleCallback) { send(403, '请从本应用页面发起操作。'); return; }
+    if (administratorHost) {
+      if (target === '/') {
+        if (!['GET', 'HEAD'].includes(req.method)) { send(405, '不支持的操作。'); return; }
+        res.writeHead(302, { Location: '/api/admin/console', 'Content-Length': 0 });
+        res.end(); return;
+      }
+      // Share the classroom app and its in-memory performance state, while
+      // keeping all teacher/student routes and static files off this host.
+      if (target === '/api/admin' || target.startsWith('/api/admin/')) { api(req, res); return; }
+      send(404, '页面不存在。'); return;
+    }
+    // Administrator maintenance is available only through the separately
+    // configured host. The local stdio image bridge is never public.
     if (target.startsWith('/mcp/') || target === '/api/admin' || target.startsWith('/api/admin/') || /^\/api\/(?:teacher\/|student\/)?image-mcp-save-local(?:\/|$)/.test(target)) { send(404, '页面不存在。'); return; }
     if (target.startsWith('/api/')) { api(req, res); return; }
     if (!['GET', 'HEAD'].includes(req.method)) { send(405, '不支持的操作。'); return; }
@@ -103,20 +123,21 @@ export async function startCloudServer({ publicOrigin = process.env.PUBLIC_ORIGI
       server.listen(port, bind, () => { server.removeListener('error', reject); resolveListen(); });
     });
   } catch (error) { await close(); throw error; }
-  return { server, db: app.db, close, publicOrigin: origin.origin, classroomUrl: origin.origin + '/' };
+  return { server, db: app.db, close, publicOrigin: origin.origin, classroomUrl: origin.origin + '/', adminOrigin: administratorOrigin?.origin ?? null, adminUrl: administratorOrigin ? administratorOrigin.origin + '/api/admin/console' : null };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     // The production runtime receives explicit environment variables; no local
     // .env, classroom CA or TLS private key is read by this entry point.
-    const app = await startCloudServer({ dbPath: process.env.FREE_IMPRO_DB || 'data/classroom.sqlite', distDirectory: process.env.DIST_DIRECTORY || 'dist', bind: process.env.CLOUD_BIND || '127.0.0.1', port: Number(process.env.CLOUD_PORT || 3000) });
-    console.log(`Classroom cloud backend ready for ${app.publicOrigin}`);
+    const app = await startCloudServer({ adminOrigin: process.env.ADMIN_ORIGIN, dbPath: process.env.FREE_IMPRO_DB || 'data/classroom.sqlite', distDirectory: process.env.DIST_DIRECTORY || 'dist', bind: process.env.CLOUD_BIND || '127.0.0.1', port: Number(process.env.CLOUD_PORT || 3000) });
     let stopping = false;
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
       if (stopping) return;
       stopping = true;
       try { await app.close(); process.exitCode = 0; } catch { process.exitCode = 1; }
     });
+    // Install shutdown handlers before telling supervisors/tests we are ready.
+    console.log(`Classroom cloud backend ready for ${app.publicOrigin}`);
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

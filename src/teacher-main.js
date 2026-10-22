@@ -1,6 +1,7 @@
 import './style.css';
 import { initClassroom } from './classroom.js';
 import { initOffline } from './offline.js';
+import { initUIDesign } from './ui-design.js';
 import { initTeacherImages } from './teacher-image-studio.js';
 
 document.querySelector('#app').innerHTML = `
@@ -9,6 +10,7 @@ document.querySelector('#app').innerHTML = `
 <nav class="tabs" aria-label="教师功能"><button id="classroom-tab" class="tab active" aria-selected="true">课堂管理与演奏</button></nav>
 <section id="classroom-view"></section><footer><span>Free Impro · 独立教师端</span><span>作品由学生端提交至课堂</span></footer></main>
 <div id="toast" role="status" aria-live="polite" hidden></div>`;
+initUIDesign('teacher');
 let timeout;
 function notify(message, error = false) {
   const toast = document.querySelector('#toast'); toast.textContent = message; toast.hidden = false; toast.classList.toggle('error', error);

@@ -1,11 +1,26 @@
 (() => {
   const call = (action, args = {}) => window.webkit.messageHandlers.localFiles.postMessage({ action, ...args });
+  window.FreeImproAudio = {
+    prepare: type => call('audio-session', { type }),
+    startRecording: id => call('audio-record-start', { id }),
+    recordingLevel: id => call('audio-record-level', { id }),
+    stopRecording: id => call('audio-record-stop', { id }),
+    cancelRecording: id => call('audio-record-cancel', { id }),
+    play: (id, encoded, mime) => call('audio-play', { id, encoded, mime }),
+    stopPlayback: id => call('audio-play-stop', { id }),
+    playRhythm: (id, encoded, bars, bpm, revision) => call('audio-rhythm-play', { id, encoded, bars, bpm, revision }),
+    queueRhythm: (id, encoded, bars, bpm, revision) => call('audio-rhythm-queue', { id, encoded, bars, bpm, revision }),
+    rhythmState: id => call('audio-rhythm-state', { id }),
+    diagnostics: () => call('audio-diagnostics'),
+  };
   window.FreeImproClassroom = {
     offline: true, connected: false, generation: 0,
     async request(path, options = {}) {
       const method = options.method || 'GET';
       const entry = path === '/api/student/enter-classroom' && method === 'POST';
-      if (!entry && !this.connected) throw new Error('请先在“我的”填写姓名和课堂码。');
+      const accountEntry = method === 'POST' && ['/api/student/account/register', '/api/student/account/login', '/api/student/account/phone/verify'].includes(path);
+      const accountSetup = (method === 'GET' && path === '/api/student/account/options') || (method === 'POST' && path === '/api/student/account/phone/send');
+      if (!entry && !accountEntry && !accountSetup && !this.connected) throw new Error('请先在“我的”登录账号或填写姓名和课堂码。');
       const signal = options.signal; signal?.throwIfAborted();
       const id = crypto.randomUUID(), ticket = this.generation;
       let abort;
@@ -18,11 +33,30 @@
         if (ticket !== this.generation) throw new DOMException('课堂连接已关闭', 'AbortError');
         const bytes = Uint8Array.from(atob(result.encoded), c => c.charCodeAt(0));
         const response = new Response(bytes, { status: result.status, headers: { 'Content-Type': result.type } });
-        if (entry && response.ok) { this.connected = true; window.dispatchEvent(new Event('freeimpro-classroom-connected')); }
+        if ((entry || accountEntry) && response.ok) { this.connected = true; window.dispatchEvent(new Event('freeimpro-classroom-connected')); }
         return response;
       } finally { signal?.removeEventListener('abort', abort); }
     },
     async disconnect() { this.connected = false; this.generation++; window.dispatchEvent(new Event('freeimpro-classroom-disconnected')); await call('disconnect'); },
+  };
+  let socialPending = false, socialGeneration = 0;
+  window.addEventListener('freeimpro-background', () => { socialGeneration++; });
+  window.addEventListener('freeimpro-classroom-disconnected', () => { socialGeneration++; });
+  window.FreeImproAuth = {
+    async signInSocial(provider, mode = 'login') {
+      if (!['wechat', 'apple'].includes(provider) || !['login', 'link'].includes(mode)) throw new Error('不支持的登录方式。');
+      if (socialPending) throw new Error('登录正在进行，请稍候。');
+      socialPending = true;
+      const ticket = socialGeneration, connection = window.FreeImproClassroom.generation;
+      try {
+        const result = await call('student-social-login', { provider, mode });
+        if (ticket !== socialGeneration || connection !== window.FreeImproClassroom.generation) throw new DOMException('登录已取消', 'AbortError');
+        if (!result?.user || typeof result.user.id !== 'string' || !result.user.id) throw new Error('登录未完成，请重新登录。');
+        window.FreeImproClassroom.connected = true;
+        window.dispatchEvent(new Event('freeimpro-classroom-connected'));
+        return { user: result.user };
+      } finally { socialPending = false; }
+    },
   };
   window.FreeImproFiles = {
     begin: (name, mime) => call('begin', { name, mime }),

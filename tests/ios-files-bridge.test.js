@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const source = readFileSync(new URL('../ios/Bridge.js', import.meta.url), 'utf8');
 function bridge(inputId, actions) {
   let click, changes = 0; const calls = [], alerts = [], sound = { value: 'original-sound' }, input = { id: inputId, dispatchEvent() { changes++; } };
-  const window = { webkit: { messageHandlers: { localFiles: { async postMessage(body) { calls.push(body); return actions(body); } } } } };
+  const window = Object.assign(new EventTarget(), { webkit: { messageHandlers: { localFiles: { async postMessage(body) { calls.push(body); return actions(body); } } } } });
   const sandbox = { window, document: { getElementById(id) { return id === 'character-sound' ? sound : null; }, addEventListener(name, handler) { if (name === 'click') click = handler; } }, crypto: { randomUUID: () => 'test-id' }, atob: value => Buffer.from(value, 'base64').toString('binary'), Uint8Array, Number, DOMException, Response, alert: message => alerts.push(message), Event: class {}, DataTransfer: class { constructor() { this.files = []; this.items = { add: file => this.files.push(file) }; } }, File: class { constructor(chunks, name, options) { this.bytes = Buffer.concat(chunks.map(c => Buffer.from(c))); this.name = name; this.type = options.type; } } };
   vm.runInNewContext(source, sandbox);
   return { window, calls, alerts, input, sound, get changes() { return changes; }, click: () => click({ target: { closest: () => input }, preventDefault() {}, stopImmediatePropagation() {} }) };

@@ -1,0 +1,2 @@
+# Preserve the exact deployed vendor bundle while checking authored whitespace.
+src/generated/** whitespace=-blank-at-eol

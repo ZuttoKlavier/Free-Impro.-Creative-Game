@@ -1,6 +1,17 @@
 import Foundation
 
 struct StudentPolicy {
+    static let publicClassroomURL = "https://class.empfreeimpro.xyz/"
+
+    // The offline document keeps its existing origin so upgrading does not
+    // switch IndexedDB libraries. Legacy classroom settings are storage-only.
+    static func preservedLocalOrigin(in defaults: UserDefaults, legacyAddress: String?) -> StudentPolicy? {
+        if let saved = defaults.string(forKey: "localOrigin") { return StudentPolicy(saved) }
+        guard let policy = StudentPolicy(legacyAddress ?? publicClassroomURL) else { return nil }
+        defaults.set(policy.origin.absoluteString, forKey: "localOrigin")
+        return policy
+    }
+
     let origin: URL
     // Only this deployment uses the OS public CA store. All classroom LAN
     // endpoints retain the bundled classroom CA and hostname validation.

@@ -54,8 +54,12 @@ async function drag(page, id, start, end) {
 async function reloadClassroom(page) {
   await page.reload(); await page.locator('#classroom-tab').click(); await expect(page.locator('.rhythm-editor')).toBeVisible();
 }
+async function pattern(page, fixture, student) {
+  const response = await page.request.get(`/api/teacher/classrooms/${fixture.roomId}`);
+  return (await response.json()).classroom.arrangement.tracks.find(track => track.studentId === student.id).steps;
+}
 
-test('student tracks edit independently by click, paint, erase and keyboard, and persist on reload', async ({ page, playwright }) => {
+test('tap and drag create distinct single and sustained notes, with independent keyboard editing and persistence', async ({ page, playwright }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   const fixture = await setup(page, playwright, ['小雨', '小林']);
   const [first, second] = fixture.students;
@@ -63,20 +67,36 @@ test('student tracks edit independently by click, paint, erase and keyboard, and
     await expect(row(page, first.id).locator('.rhythm-step')).toHaveCount(16);
     await saved(page, () => step(page, first.id, 0).click());
     await saved(page, () => drag(page, first.id, 4, 7));
-    for (const index of [0, 4, 5, 6, 7]) await expect(step(page, first.id, index)).toHaveAttribute('aria-pressed', 'true');
+    expect((await pattern(page, fixture, first)).slice(4, 8)).toEqual([4, false, false, false]);
+    for (const index of [0, 4]) await expect(step(page, first.id, index)).toHaveAttribute('aria-pressed', 'true');
+    await expect(row(page, first.id).locator('.rhythm-held')).toHaveCount(4);
     await expect(row(page, second.id).locator('[aria-pressed="true"]')).toHaveCount(0);
-    await saved(page, () => drag(page, first.id, 5, 6));
-    await expect(step(page, first.id, 5)).toHaveAttribute('aria-pressed', 'false');
+    // Starting inside a sustained note replaces that entire note without overlap.
+    await saved(page, () => drag(page, first.id, 6, 5));
+    expect((await pattern(page, fixture, first)).slice(4, 8)).toEqual([false, 2, false, false]);
+    await expect(step(page, first.id, 5)).toHaveAttribute('aria-pressed', 'true');
     await expect(step(page, first.id, 6)).toHaveAttribute('aria-pressed', 'false');
+    // Tapping the continuation switches off its whole note.
+    await saved(page, () => step(page, first.id, 6).click());
+    await expect(row(page, first.id).locator('.rhythm-held')).toHaveCount(0);
+    await saved(page, () => drag(page, first.id, 7, 4));
+    await saved(page, () => step(page, first.id, 12).click());
+    await expect(row(page, first.id).locator('.rhythm-held')).toHaveCount(4);
     await step(page, second.id, 0).focus(); await step(page, second.id, 0).press('ArrowRight');
     await expect(step(page, second.id, 1)).toBeFocused();
     await saved(page, () => step(page, second.id, 1).press('Space'));
+    await saved(page, () => step(page, second.id, 1).press('Shift+ArrowRight'));
+    expect((await pattern(page, fixture, second))[1]).toBe(2);
+    await saved(page, () => step(page, second.id, 1).press('Shift+ArrowLeft'));
+    expect((await pattern(page, fixture, second))[1]).toBe(true);
     await reloadClassroom(page);
     await expect(step(page, first.id, 0)).toHaveAttribute('aria-pressed', 'true');
     await expect(step(page, first.id, 4)).toHaveAttribute('aria-pressed', 'true');
     await expect(step(page, first.id, 5)).toHaveAttribute('aria-pressed', 'false');
     await expect(step(page, first.id, 6)).toHaveAttribute('aria-pressed', 'false');
-    await expect(step(page, first.id, 7)).toHaveAttribute('aria-pressed', 'true');
+    await expect(step(page, first.id, 7)).toHaveAttribute('aria-pressed', 'false');
+    await expect(row(page, first.id).locator('.rhythm-held')).toHaveCount(4);
+    expect((await pattern(page, fixture, first)).slice(4, 8)).toEqual([4, false, false, false]);
     await expect(step(page, second.id, 1)).toHaveAttribute('aria-pressed', 'true');
     await expect(step(page, second.id, 0)).toHaveAttribute('aria-pressed', 'false');
     await page.locator('#rhythm-toggle').click(); await expect(step(page, first.id, 0)).not.toBeVisible();
@@ -86,22 +106,74 @@ test('student tracks edit independently by click, paint, erase and keyboard, and
   } finally { await fixture.dispose(); }
 });
 
+test('reversing and cancelling a drag restores unaffected notes and keeps gestures within their track', async ({ page, playwright }) => {
+  const fixture = await setup(page, playwright, ['小雨', '小林']), [first, second] = fixture.students;
+  try {
+    await saved(page, () => step(page, first.id, 7).click());
+    const from = await step(page, first.id, 4).boundingBox(), far = await step(page, first.id, 7).boundingBox(), near = await step(page, first.id, 5).boundingBox();
+    await saved(page, async () => {
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2); await page.mouse.down();
+      await page.mouse.move(far.x + far.width / 2, far.y + far.height / 2);
+      await page.mouse.move(near.x + near.width / 2, near.y + near.height / 2); await page.mouse.up();
+    });
+    expect((await pattern(page, fixture, first)).slice(4, 8)).toEqual([2, false, false, true]);
+    const before = await pattern(page, fixture, first);
+    await step(page, first.id, 0).scrollIntoViewIfNeeded();
+    const start = await step(page, first.id, 0).boundingBox(), end = await step(page, first.id, 3).boundingBox();
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2); await page.mouse.down();
+    await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2);
+    await expect(row(page, first.id).locator('.rhythm-held')).toHaveCount(6);
+    await row(page, first.id).locator('.rhythm-steps').dispatchEvent('pointercancel', { pointerId: 1 });
+    await page.mouse.up();
+    await expect(row(page, first.id).locator('.rhythm-held')).toHaveCount(2);
+    expect(await pattern(page, fixture, first)).toEqual(before);
+    await expect(row(page, second.id).locator('[aria-pressed="true"]')).toHaveCount(0);
+  } finally { await fixture.dispose(); }
+});
+
+test.describe('touch gestures', () => {
+  test.use({ hasTouch: true });
+  test('touch tap toggles one note and touch drag saves one sustained note', async ({ page, playwright }) => {
+    const fixture = await setup(page, playwright), student = fixture.students[0];
+    try {
+      await saved(page, () => step(page, student.id, 0).tap());
+      expect((await pattern(page, fixture, student))[0]).toBe(true);
+      const from = await step(page, student.id, 4).boundingBox(), to = await step(page, student.id, 7).boundingBox();
+      const session = await page.context().newCDPSession(page);
+      await saved(page, async () => {
+        await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from.x + from.width / 2, y: from.y + from.height / 2 }] });
+        await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: to.x + to.width / 2, y: to.y + to.height / 2 }] });
+        await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      });
+      expect((await pattern(page, fixture, student)).slice(4, 8)).toEqual([4, false, false, false]);
+      await expect(row(page, student.id).locator('.rhythm-held')).toHaveCount(4);
+      await saved(page, () => step(page, student.id, 6).tap());
+      expect((await pattern(page, fixture, student)).slice(4, 8)).toEqual([false, false, false, false]);
+      await session.detach();
+    } finally { await fixture.dispose(); }
+  });
+});
+
 test('bar navigation, copying and clearing are scoped, and shrinking permanently discards the tail', async ({ page, playwright }) => {
   const fixture = await setup(page, playwright), student = fixture.students[0];
   try {
     await saved(page, () => page.locator('#rhythm-bars').selectOption('3'));
-    await saved(page, () => step(page, student.id, 0).click());
+    await saved(page, () => drag(page, student.id, 0, 3));
     await saved(page, () => row(page, student.id).locator('[data-copy-bar]').click());
     await page.locator('[data-rhythm-bar="1"]').click();
     await expect(step(page, student.id, 16)).toHaveAttribute('aria-pressed', 'true');
+    await expect(row(page, student.id).locator('.rhythm-held')).toHaveCount(4);
+    expect((await pattern(page, fixture, student)).slice(16, 20)).toEqual([4, false, false, false]);
     await saved(page, () => row(page, student.id).locator('[data-clear-bar]').click());
     await expect(step(page, student.id, 16)).toHaveAttribute('aria-pressed', 'false');
+    await expect(row(page, student.id).locator('.rhythm-held')).toHaveCount(0);
     await page.locator('[data-rhythm-bar="2"]').click();
     await expect(row(page, student.id).locator('[data-copy-bar]')).toBeDisabled();
     await saved(page, () => step(page, student.id, 47).click());
     await saved(page, () => page.locator('#rhythm-bars').selectOption('1'));
     await expect(page.locator('[data-rhythm-bar]')).toHaveCount(1);
     await expect(step(page, student.id, 0)).toHaveAttribute('aria-pressed', 'true');
+    expect((await pattern(page, fixture, student)).slice(0, 4)).toEqual([4, false, false, false]);
     await saved(page, () => page.locator('#rhythm-bars').selectOption('3'));
     await page.locator('[data-rhythm-bar="2"]').click();
     await expect(row(page, student.id).locator('.rhythm-step[aria-pressed="true"]')).toHaveCount(0);

@@ -3,6 +3,7 @@ import { canvasBlob, normalizeGeneratedImage, toDataURL } from './images.js';
 import './characters.css';
 import { isStudentClient, capturePhoto } from './student-client.js';
 import { classroomFetch, canUseClassroom } from './classroom-transport.js';
+import { imageRequestStatus } from './image-request-status.js';
 
 export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
   const root = document.getElementById('characters-view');
@@ -12,12 +13,12 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
     <div class="character-grid"><section class="panel"><div class="panel-top"><span class="section-kicker">01 / 拍照与主体</span><span class="pill">照片仅裁切后上传</span></div><h2>找到声音的主人</h2><p class="muted">将想保留的主体放在画面中间，可拖动照片并调整大小。</p><div class="photo-actions"><button id="take-photo" class="primary">拍一张照片</button><button id="import-photo" class="secondary">从相册选择</button></div>
     <div id="photo-empty" class="photo-empty"><span>◎</span><strong>杯子、树叶、你的乐器…</strong><p>从一张照片开始，发现它的另一面。</p></div><div id="crop-editor" hidden><canvas id="photo-canvas" width="512" height="512" aria-label="拖动照片选择主体" aria-describedby="crop-help"></canvas><p id="crop-help" class="muted">拖动画面选择主体，也可用下方滑块微调。</p><label class="crop-slider">放大<input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1"></label><label class="crop-slider">左右<input id="crop-x" type="range" min="-1" max="1" step="0.01" value="0"></label><label class="crop-slider">上下<input id="crop-y" type="range" min="-1" max="1" step="0.01" value="0"></label><button id="reset-crop" class="text-button">重置裁切</button></div>
     <p class="muted">支持 JPG、PNG、WebP，最大 10 MB。照片选择后不会自动发送。</p></section>
-    <section class="panel"><div class="panel-top"><span class="section-kicker">02 / 动漫小伙伴</span><span class="pill teal">统一 3D 动画风格</span></div><h2>听得见，也看得见</h2><div id="character-preview" class="character-preview"><span id="avatar-placeholder">✦<small>你的小伙伴即将在这里出现</small></span><img id="avatar-preview" alt="生成的动漫形象" hidden></div><p id="character-status" role="status" class="muted">生成前请在“我的”填写姓名和课堂码连接课堂。</p><button id="generate-character" class="primary" disabled>生成动漫形象</button><p class="muted generation-disclosure">注册学生账号后可以申请形象，每天一张。仅照片用于生成，声音不会发送。</p><div class="character-save"><button id="save-character" class="secondary" disabled>保存照片草稿</button><p class="muted">保存到当前声音作品，不占用额外作品名额。已有课堂作品需重新提交后才会更新。</p></div></section></div></div>
+    <section class="panel"><div class="panel-top"><span class="section-kicker">02 / 动漫小伙伴</span><span class="pill teal">统一 3D 动画风格</span></div><h2>听得见，也看得见</h2><div id="character-preview" class="character-preview"><span id="avatar-placeholder">✦<small>你的小伙伴即将在这里出现</small></span><img id="avatar-preview" alt="生成的动漫形象" hidden></div><p id="character-status" role="status" class="muted">生成前请在“我的”填写姓名和课堂码连接课堂。</p><button id="image-next-action" class="secondary" hidden></button><button id="generate-character" class="primary" disabled>生成动漫形象</button><p class="muted generation-disclosure">注册学生账号后可以申请形象，每天一张。仅照片用于生成，声音不会发送。</p><div class="character-save"><button id="save-character" class="secondary" disabled>保存照片草稿</button><p class="muted">保存到当前声音作品，不占用额外作品名额。已有课堂作品需重新提交后才会更新。</p></div></section></div></div>
     <button id="cancel-generation" class="secondary" hidden>取消等待</button><input id="camera-file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>`;
   const $ = id => root.querySelector('#' + id);
   const PROFILE = '__student_profile__';
-  let serviceMode = '', serviceStatus = null;
-  let pendingPreview = null;
+  let serviceMode = '', serviceStatus = null, serviceError = '', nextAction = '', nextActionBusy = false;
+  let pendingPreview = null, requestPhoto = null;
   let soundId = '', bitmap = null, avatar = null, zoom = 1, panX = 0, panY = 0, avatarURL, working = false, photoLoading = false, controller, generation = 0, photoRevision = 0, editRevision = 0, configured = false, drag = null;
   async function refreshSounds() {
     const sounds = await listSounds(); const selected = soundId;
@@ -28,15 +29,48 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
     else if (soundId) { soundId = ''; clearPhoto(); }
     $('character-sound-hint').hidden = sounds.length > 0; updateButtons();
   }
-  function updateButtons() { const ready = serviceMode !== 'chatgpt-web' || (serviceStatus?.registered && serviceStatus.remaining > 0 && !serviceStatus.pendingJobId && (soundId === PROFILE || serviceStatus.hasAvatar)); $('generate-character').disabled = !bitmap || !soundId || working || photoLoading || !configured || !ready; $('save-character').hidden = soundId === PROFILE; $('save-character').disabled = !bitmap || !soundId || working || photoLoading; $('save-character').textContent = avatar ? '保存声音形象' : '保存照片草稿'; }
+  function updateButtons() {
+    const ready = serviceMode !== 'chatgpt-web' || (serviceStatus?.registered && serviceStatus.remaining > 0 && !serviceStatus.pendingJobId && (soundId === PROFILE || serviceStatus.hasAvatar));
+    $('generate-character').disabled = !bitmap || !soundId || working || photoLoading || !configured || !ready;
+    $('save-character').hidden = soundId === PROFILE; $('save-character').disabled = !bitmap || !soundId || working || photoLoading;
+    $('save-character').textContent = avatar ? '保存声音形象' : '保存照片草稿';
+    let reason = ''; nextAction = '';
+    if (!working && !photoLoading) {
+      if (!canUseClassroom()) { reason = '请先连接课堂，再申请图片；照片草稿可以离线保存。'; nextAction = 'connect'; }
+      else if (serviceError) { reason = serviceError; nextAction = 'connect'; }
+      else if (serviceMode === 'chatgpt-web' && !serviceStatus?.userId) { reason = '请先在“我的”填写姓名和课堂码连接课堂。'; nextAction = 'connect'; }
+      else if (serviceMode === 'chatgpt-web' && !serviceStatus.registered) { reason = '请先注册生图账号，再申请图片；照片草稿可以先保存。'; nextAction = 'register'; }
+      else if (serviceMode === 'chatgpt-web' && serviceStatus.pendingJobId) reason = imageRequestStatus(serviceStatus);
+      else if (serviceMode === 'chatgpt-web' && !configured) { reason = '请先连接可进入的课堂，再申请图片。'; nextAction = 'connect'; }
+      else if (serviceMode === 'chatgpt-web' && serviceStatus.remaining === 0) reason = avatar ? '形象已保存在本地；今天的图片额度已使用，明天再来。' : '今天的图片额度已使用，明天再来；固定形象与作品配图每天共用一张额度。';
+      else if (serviceMode === 'chatgpt-web' && soundId !== PROFILE && !serviceStatus.hasAvatar) { reason = '请先制作固定学生形象，再申请声音作品配图。'; nextAction = 'identity'; }
+      else if (!configured) reason = '形象生成尚未启用，可先保存照片草稿。';
+      else if (!soundId) reason = '请先选择一份已命名并保存的声音。';
+      else if (!bitmap) reason = '请先拍照或从相册选择照片，再申请图片。';
+    }
+    if (reason) $('character-status').textContent = reason;
+    $('image-next-action').hidden = !nextAction;
+    $('image-next-action').textContent = ({ connect: '去连接课堂', register: '注册生图账号', identity: '先制作固定形象' })[nextAction] || '';
+    $('image-next-action').disabled = nextActionBusy || working || photoLoading;
+  }
+  $('image-next-action').onclick = async () => {
+    if (nextActionBusy || working || photoLoading) return;
+    const action = nextAction; nextActionBusy = true; updateButtons();
+    try {
+      if (action === 'connect') window.dispatchEvent(new Event('freeimpro-open-image-account'));
+      else if (action === 'register') { await imageWorkflow().register(); await checkService(); notify('生图账号已注册，可以制作固定形象。'); }
+      else if (action === 'identity') await editIdentity();
+    } catch (error) { notify(error.message || '暂时无法完成，请重试。', true); }
+    finally { nextActionBusy = false; updateButtons(); }
+  };
   function renderAvatar() {
     if (avatarURL) URL.revokeObjectURL(avatarURL); avatarURL = undefined;
     $('avatar-preview').hidden = !avatar; $('avatar-placeholder').hidden = !!avatar;
     if (avatar) { avatarURL = URL.createObjectURL(avatar); $('avatar-preview').src = avatarURL; }
     else $('avatar-preview').removeAttribute('src'); updateButtons();
   }
-  function clearPhoto() { pendingPreview = null; photoRevision++; photoLoading = false; drag = null; bitmap?.close(); bitmap = null; avatar = null; zoom = 1; panX = panY = 0; $('photo-empty').hidden = false; $('crop-editor').hidden = true; renderAvatar(); }
-  function cropChanged() { avatar = null; photoRevision++; photoLoading = false; renderAvatar(); $('character-status').textContent = '照片已调整，可生成新形象或先保存照片草稿。'; }
+  function clearPhoto() { pendingPreview = requestPhoto = null; photoRevision++; photoLoading = false; drag = null; bitmap?.close(); bitmap = null; avatar = null; zoom = 1; panX = panY = 0; $('photo-empty').hidden = false; $('crop-editor').hidden = true; renderAvatar(); }
+  function cropChanged() { avatar = null; photoRevision++; photoLoading = false; renderAvatar(); $('character-status').textContent = '照片已调整，可生成新形象或先保存照片草稿。'; updateButtons(); }
   function draw() {
     if (!bitmap) return; const c = $('photo-canvas'), ctx = c.getContext('2d'), scale = Math.max(512 / bitmap.width, 512 / bitmap.height) * zoom;
     const w = bitmap.width * scale, h = bitmap.height * scale;
@@ -68,7 +102,7 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
     root.querySelector('.class-heading h2').textContent = '为声音制作配图';
     await refreshSounds(); if (edit !== editRevision || revision !== photoRevision || soundId !== sound.id) return;
     try { if (sound.photo && !await setPhoto(sound.photo)) return; if (edit !== editRevision || soundId !== sound.id) return; avatar = sound.avatar || null; renderAvatar(); $('character-status').textContent = avatar ? '已载入保存的形象，可以重新生成。' : '选一张照片，开始制作声音形象。'; } catch { if (edit === editRevision) notify('已保存的图片暂时无法打开，请重新选择照片。', true); }
-    if (sound.imageRequest) { pendingPreview = { jobId: sound.imageRequest.id, soundId, revision: photoRevision }; $('character-status').textContent = '图像生成中'; }
+    if (sound.imageRequest) { pendingPreview = requestPhoto = { jobId: sound.imageRequest.id, soundId, revision: photoRevision }; $('character-status').textContent = imageRequestStatus(sound.imageRequest); }
     if (serviceMode === 'chatgpt-web' && !serviceStatus?.hasAvatar) $('character-status').textContent = '请先在“我的”完成固定学生形象，再制作持物作品配图。';
     updateButtons();
   }
@@ -78,7 +112,7 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
     root.querySelector('.class-heading h2').textContent = '制作固定学生形象';
     $('character-sound').disabled = true;
     await refreshSounds(); await checkService();
-    $('character-status').textContent = serviceStatus?.pendingJobId ? '图像生成中' : '拍摄或选择自己的正面照片，生成固定的 3D 动画风格形象图片。';
+    $('character-status').textContent = serviceStatus?.pendingJobId ? imageRequestStatus(serviceStatus) : '拍摄或选择自己的正面照片，生成固定的 3D 动画风格形象图片。'; updateButtons();
   }
   $('character-sound').onchange = async e => { const selected = e.target.value, sounds = await listSounds(); if (e.target.value !== selected) return; const sound = sounds.find(s => s.id === selected); if (sound) await editSound(sound); else { editRevision++; soundId = ''; clearPhoto(); } };
   $('take-photo').onclick = () => $('camera-file').click(); $('import-photo').onclick = () => $('photo-file').click();
@@ -89,7 +123,7 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
   for (const id of ['camera-file', 'photo-file']) $(id).onchange = async event => {
     const file = event.target.files[0]; event.target.value = ''; if (!file) return;
     if (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { notify('请选择 10 MB 以内的 JPG、PNG 或 WebP 照片。', true); return; }
-    try { if (await setPhoto(file)) $('character-status').textContent = '拖动照片或缩放，让你想变成角色的主体清晰可见。'; } catch (e) { notify(e.message || '照片无法读取，请换一张试试。', true); }
+    try { if (await setPhoto(file)) $('character-status').textContent = '拖动照片或缩放，让你想变成角色的主体清晰可见。'; updateButtons(); } catch (e) { notify(e.message || '照片无法读取，请换一张试试。', true); }
   };
   for (const id of ['crop-zoom', 'crop-x', 'crop-y']) $(id).oninput = () => { zoom = Number($('crop-zoom').value); panX = Number($('crop-x').value); panY = Number($('crop-y').value); cropChanged(); draw(); };
   $('reset-crop').onclick = () => { zoom = 1; panX = panY = 0; cropChanged(); draw(); };
@@ -108,15 +142,20 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
     if (!bitmap || !soundId || working || photoLoading) return;
     const ticket = ++generation, revision = photoRevision, selectedSound = soundId;
     const current = () => ticket === generation && revision === photoRevision && selectedSound === soundId;
-    controller = new AbortController(); setWorking(true); $('character-status').textContent = '正在生成动漫小伙伴…通常需要一些时间，请稍候。';
+    controller = new AbortController(); setWorking(true); $('character-status').textContent = serviceMode === 'chatgpt-web' ? '正在提交图片申请，请稍候。' : '正在生成动漫小伙伴…通常需要一些时间，请稍候。';
     try {
       const cropped = await cropBlob(), photo = await toDataURL(cropped);
       if (!current()) return;
       if (serviceMode === 'chatgpt-web') {
         const sound = (await listSounds()).find(s => s.id === selectedSound);
         if (!current()) return;
+        const submittedPhoto = requestPhoto = { soundId: selectedSound, revision };
         const job = await imageWorkflow().request({ kind: selectedSound === PROFILE ? 'identity' : 'work', workId: sound?.id, workName: sound?.name, photo: cropped });
-        if (current()) { pendingPreview = { jobId: job.id, soundId, revision: photoRevision }; $('character-status').textContent = job.status === 'rejected' ? '本次申请未完成，请联系老师。' : '图像生成中'; }
+        submittedPhoto.jobId = job.id;
+        if (current()) {
+          pendingPreview = submittedPhoto.completed ? null : { jobId: job.id, soundId, revision: photoRevision };
+          $('character-status').textContent = submittedPhoto.completed ? '形象已保存在本地。' : imageRequestStatus(job);
+        }
         return;
       }
       const response = await classroomFetch('/api/student/characters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ photo }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(250000)]) });
@@ -130,6 +169,7 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
   $('save-character').onclick = async () => {
     if (!soundId || !bitmap || working || photoLoading) return;
     const selectedSound = soundId, revision = photoRevision, savedAvatar = avatar;
+    let storedAvatar = savedAvatar;
     const requireCurrent = () => {
       if (selectedSound !== soundId || revision !== photoRevision) {
         const message = '声音或照片已更改，本次未保存，请确认后重新保存。';
@@ -140,31 +180,49 @@ export function initCharacters({ show, notify, onSaved, imageWorkflow }) {
     try {
       const sound = (await listSounds()).find(s => s.id === selectedSound); requireCurrent();
       if (!sound) throw new Error('这份声音已被删除，请重新选择。');
+      const waitingPhoto = pendingPreview?.soundId === selectedSound && pendingPreview.revision === revision ? pendingPreview : requestPhoto?.soundId === selectedSound && requestPhoto.revision === revision ? requestPhoto : null;
+      const waitingJobId = serviceMode === 'chatgpt-web' && waitingPhoto ? waitingPhoto.jobId || sound.imageRequest?.id : null;
       const photo = await cropBlob(); requireCurrent();
-      const saved = await updateSound(selectedSound, latest => { requireCurrent(); return { ...latest, photo, avatar: savedAvatar, imageRequest: null, imageUpdatedAt: Date.now() }; }); if (!saved) throw new Error('这份声音已被删除，本次未保存。'); await onSaved();
-      notify(savedAvatar ? '声音形象已保存在本地作品库。' : '照片草稿已保存，可稍后继续生成形象。');
+      const saved = await updateSound(selectedSound, latest => {
+        requireCurrent();
+        const waiting = waitingJobId && latest.imageRequest?.id === waitingJobId;
+        const completedDuringSave = waitingJobId && !latest.imageRequest && latest.avatar && (latest.imageUpdatedAt !== sound.imageUpdatedAt || !sound.avatar || avatar !== savedAvatar);
+        storedAvatar = waiting || completedDuringSave ? latest.avatar : savedAvatar;
+        return { ...latest, photo, avatar: storedAvatar, imageRequest: waiting ? latest.imageRequest : null, imageUpdatedAt: waiting || completedDuringSave ? latest.imageUpdatedAt : Date.now() };
+      }); if (!saved) throw new Error('这份声音已被删除，本次未保存。'); await onSaved();
+      notify(storedAvatar ? '声音形象已保存在本地作品库。' : '照片草稿已保存，可稍后继续生成形象。');
     }
     catch (e) { notify(e.message || '保存失败，请检查设备空间。', true); } finally { working = false; $('character-controls').inert = false; updateButtons(); }
   };
   async function checkService() {
-    if (!canUseClassroom()) { configured = false; $('image-service-note').textContent = '可离线拍照、裁切并保存草稿；加入课堂后可使用联网形象生成。'; updateButtons(); return; }
-    try { const response = await classroomFetch('/api/student/image-status'); const result = await response.json(); applyService(result); }
-    catch { configured = false; $('image-service-note').textContent = '暂时连接不上图像服务，可以先保存照片草稿。'; } updateButtons();
+    if (!canUseClassroom()) { configured = false; serviceError = ''; $('image-service-note').textContent = '可离线拍照、裁切并保存草稿；加入课堂后可使用联网形象生成。'; updateButtons(); return; }
+    try {
+      const response = await classroomFetch('/api/student/image-status');
+      if (!response.ok) throw Object.assign(new Error(response.status === 401 || response.status === 403 ? '课堂登录已失效，请重新连接课堂后申请图片。' : '暂时无法读取图片状态，可以先保存照片草稿，稍后重新连接课堂。'), { status: response.status });
+      applyService(await response.json());
+    } catch (error) { configured = false; serviceError = error.status ? error.message : '暂时连接不上图像服务，可以先保存照片草稿，稍后重新连接课堂。'; $('image-service-note').textContent = serviceError; } updateButtons();
   }
   function applyService(result) {
-    serviceMode = result.mode || ''; serviceStatus = result; configured = result.configured === true;
+    serviceMode = result.mode || ''; serviceStatus = result;
+    // The profile synchronizer can publish an unauthenticated placeholder after
+    // this editor has received a precise HTTP error. Keep that recovery reason
+    // until a status for an actual student is authenticated successfully.
+    if (serviceMode !== 'chatgpt-web' || result.userId) serviceError = '';
+    configured = result.configured === true;
     if (serviceMode === 'chatgpt-web') {
       $('image-service-note').textContent = result.registered ? `每天一张图片 · 今日剩余 ${result.remaining} 张` : '注册学生账号后才能生成图片；仍可离线拍照、裁切并保存草稿。';
       $('generate-character').textContent = '生成形象';
       root.querySelector('.generation-disclosure').textContent = '申请后，裁切照片将用于制作形象。仅照片用于生成，声音不会发送。请使用自己的照片或获准使用的物品照片。';
-      if (result.pendingJobId) $('character-status').textContent = '图像生成中';
-    } else $('image-service-note').textContent = configured ? '已配置 OpenAI 图像服务 · 连接课堂后可生成物品动漫形象' : '图像生成尚未启用。请教师配置服务器 API 密钥；你仍可拍照、裁切并保存草稿。';
+      if (result.pendingJobId) $('character-status').textContent = imageRequestStatus(result);
+    } else $('image-service-note').textContent = configured ? '形象生成服务已连接，可制作物品动漫形象。' : '图像生成尚未启用，你仍可拍照、裁切并保存草稿。';
     updateButtons();
   }
   window.addEventListener('freeimpro-image-status', event => applyService(event.detail));
   window.addEventListener('freeimpro-image-result', event => {
     const result = event.detail;
-    if (result.kind === 'identity' && soundId === PROFILE || result.kind === 'work' && pendingPreview?.jobId === result.jobId && pendingPreview.soundId === soundId && pendingPreview.revision === photoRevision) {
+    const expected = pendingPreview || requestPhoto;
+    if (result.kind === 'identity' && soundId === PROFILE || result.kind === 'work' && result.workId === soundId && expected?.soundId === soundId && expected.revision === photoRevision && (!expected.jobId || expected.jobId === result.jobId)) {
+      if (requestPhoto?.soundId === soundId && requestPhoto.revision === photoRevision && (!requestPhoto.jobId || requestPhoto.jobId === result.jobId)) requestPhoto.completed = true;
       avatar = result.avatar; pendingPreview = null; renderAvatar(); $('character-status').textContent = '形象已保存在本地。';
     }
   });

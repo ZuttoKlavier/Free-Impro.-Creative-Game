@@ -1,4 +1,5 @@
 export async function initOffline() {
+  if (/^\/api\/admin\/preview\/(student|teacher)$/.test(location.pathname)) return;
   if (window.FreeImproClassroom?.offline) return; // The iOS shell is already in the install bundle.
   if (navigator.userAgent.includes('FreeImproTeacher/')) return;
   if (!import.meta.env.PROD || !('serviceWorker' in navigator) || !window.isSecureContext) return;

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 async function register(page, role, name, code) {
   await page.goto(role === 'teacher' ? '/teacher.html' : '/'); await page.locator('#classroom-tab').click();
-  if (role === 'student') { await page.locator('#auth-username').fill(name); await page.locator('#auth-password').fill(code); await page.locator('#auth-submit').click(); await expect(page.locator('#signed-in')).toBeVisible(); return; }
+  if (role === 'student') { await page.locator('#open-my-classroom').click(); await page.locator('#auth-username').fill(name); await page.locator('#auth-password').fill(code); await page.locator('#auth-submit').click(); await expect(page.locator('#signed-in')).toBeVisible(); return; }
   await page.locator('#mode-register').click(); await page.locator('#auth-name').fill(name);
   await page.locator('#auth-username').fill(role + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000));
   await page.locator('#auth-password').fill('password_for_test'); await page.locator('#auth-submit').click();
@@ -12,7 +12,7 @@ async function saveDemo(page, name) {
   await page.locator('#library-tab').click(); await page.locator('#demo').click();
   await page.locator('#sound-name').fill(name); await page.locator('#save').click();
   await expect(page.locator('#toast')).toContainText('已保存在');
-  await page.locator('#classroom-tab').click();
+  await page.locator('#classroom-tab').click(); await page.locator('#open-my-classroom').click();
 }
 async function submit(page) { await page.locator('#send-sound').click(); await page.locator('#submit-dialog button[value="submit"]').click(); }
 
@@ -27,13 +27,14 @@ test('separate teacher and student accounts submit and approve replacement; relo
   await register(student, 'student', '小林', code);
   await expect(student.locator('.room-title h2')).toHaveText('我们的节奏课堂');
   await saveDemo(student, '第一声'); await submit(student);
+  await expect(student.locator('#classroom-view')).toHaveClass(/student-classroom-complete/);
   await expect(student.locator('.submission-item strong')).toHaveText('第一声');
   await teacher.locator('#refresh-class').click(); await expect(teacher.locator('.member-card')).toContainText('第一声');
   await saveDemo(student, '第二声'); await student.locator('#class-sound').selectOption({ label: '第二声 · 0.15 秒' }); await submit(student);
   await expect(student.locator('.status-pill.pending')).toHaveText('更换待接受');
   await teacher.locator('#refresh-class').click(); await teacher.locator('.teacher-waiting').getByRole('button', { name: '接受更换' }).click(); await expect(teacher.locator('.status-pill.pending')).toHaveCount(0);
   await student.locator('#refresh-class').click(); await expect(student.locator('.submission-item strong')).toHaveText(['第二声']);
-  await student.reload(); await student.locator('#classroom-tab').click(); await expect(student.locator('#identity')).toContainText('小林');
+  await student.reload(); await student.locator('#classroom-tab').click(); await expect(student.locator('#open-my-classroom')).toBeEnabled(); await student.locator('#open-my-classroom').click(); await expect(student.locator('#identity')).toContainText('小林');
   await student.screenshot({ path: 'test-results/classroom-student.png', fullPage: true });
   await teacher.screenshot({ path: 'test-results/classroom-teacher.png', fullPage: true });
   expect(errors).toEqual([]); await teacherContext.close(); await studentContext.close();
@@ -47,7 +48,7 @@ test('disconnected submission stays in IndexedDB and retry delivers once', async
   await saveDemo(student, '断网时的声音');
   await student.route('**/api/**', route => route.abort()); await submit(student);
   await expect(student.locator('.queue-row')).toContainText('断网时的声音');
-  await student.reload(); await student.locator('#classroom-tab').click();
+  await student.reload(); await student.locator('#classroom-tab').click(); await student.locator('#open-my-classroom').click();
   await expect(student.locator('#connection-note')).toBeVisible(); await expect(student.locator('.queue-row')).toContainText('断网时的声音');
   await student.unroute('**/api/**'); await student.locator('#refresh-class').click();
   await expect(student.locator('.queue-row')).toHaveCount(0); await expect(student.locator('.submission-item strong')).toHaveText('断网时的声音');

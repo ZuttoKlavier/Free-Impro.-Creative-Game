@@ -31,8 +31,8 @@ async function setup(options = {}) {
   const audio = Buffer.from(await encodeWav(new Float32Array(2400), 24000).arrayBuffer()).toString('base64');
   const png = new PNG({ width: 2, height: 2 }); png.data.fill(180);
   const image = 'data:image/png;base64,' + PNG.sync.write(png).toString('base64');
-  async function submit(request, name, roomId = room.id) {
-    const result = await request(`/classrooms/${roomId}/submit`, { name, requestId: randomUUID(), audio, image, imageKind: 'avatar' });
+  async function submit(request, name, roomId = room.id, rhythm) {
+    const result = await request(`/classrooms/${roomId}/submit`, { name, requestId: randomUUID(), audio, image, imageKind: 'avatar', ...(rhythm ? { rhythm } : {}) });
     assert.equal(result.status, 201);
     return result.data.classroom.submissions.find(item => item.name === name);
   }
@@ -40,6 +40,69 @@ async function setup(options = {}) {
   return { ...app, base, client, teacher, student, second, waiting, stranger, users, room, original, secondOriginal, submit, image,
     close: async () => { await new Promise(resolve => app.server.close(resolve)); app.db.close(); } };
 }
+
+test('submitted compositions reach the classroom intact and replacements change sample and rhythm together', async () => {
+  const f = await setup();
+  try {
+    const room = (await f.teacher('/classrooms', { name: '带节奏上传', capacity: 2, background: '操场' })).data.classroom;
+    await f.student('/join', { code: room.code });
+    await f.teacher(`/classrooms/${room.id}/arrangement`, { revision: 0, bars: 2 });
+    const first = { bars: 1, steps: [4, ...Array(7).fill(false), true, ...Array(7).fill(false)] };
+    const original = await f.submit(f.student, '长音作品', room.id, first);
+    let snapshot = (await f.teacher(`/classrooms/${room.id}`)).data.classroom;
+    assert.deepEqual(original.rhythm, first);
+    assert.deepEqual(snapshot.arrangement.tracks[0].steps, [...first.steps, ...first.steps]);
+    const next = { bars: 2, steps: [...Array(16).fill(false), false, 8, ...Array(14).fill(false)] };
+    await f.teacher(`/classrooms/${room.id}/performance`, { playing: true, activeStudentIds: [f.users.student.id] });
+    const replacement = await f.submit(f.student, '第二份长音作品', room.id, next);
+    snapshot = (await f.teacher(`/submissions/${replacement.id}/accept`, {})).data.classroom;
+    assert.equal(snapshot.submissions.find(s => s.id === replacement.id).status, 'accepted');
+    assert.deepEqual(snapshot.arrangement.tracks[0].steps, [...first.steps, ...first.steps]);
+    snapshot = (await f.teacher(`/classrooms/${room.id}/activate`, { submissionIds: [replacement.id] })).data.classroom;
+    assert.deepEqual(snapshot.arrangement.tracks[0].steps, next.steps);
+    assert.equal(snapshot.submissions.find(s => s.id === replacement.id).status, 'current');
+    await f.teacher(`/classrooms/${room.id}/performance`, { playing: false, activeStudentIds: [] });
+    const withoutDraft = await f.submit(f.student, '仅更换采样', room.id);
+    snapshot = (await f.teacher(`/submissions/${withoutDraft.id}/accept`, {})).data.classroom;
+    assert.deepEqual(snapshot.arrangement.tracks[0].steps, next.steps);
+  } finally { await f.close(); }
+});
+
+test('classroom stage exposes only the published audible mix and protects every media and control route', async () => {
+  let time = 100000;
+  const f = await setup({ performanceNow: () => time });
+  const base = `/classrooms/${f.room.id}`, steps = [4, ...Array(15).fill(false)];
+  const timeline = { bpm: 100, swing: .2, volume: .8, bars: 1, loop: 3, remaining: 1.2, tracks: [{ id: f.users.student.id, submissionId: f.original.id, pattern: steps, volume: .65, position: { x: .3, y: .6 } }] };
+  try {
+    assert.equal((await f.teacher(base + '/performance', { playing: true, activeStudentIds: [f.users.student.id], timeline })).status, 200);
+    time += 250;
+    const response = await f.second(base + '/stage');
+    assert.equal(response.status, 200);
+    const stage = response.data.stage;
+    assert.equal(stage.performance.serverNow - stage.performance.updatedAt, 250);
+    assert.deepEqual(stage.performers[0].pattern, steps);
+    assert.equal(stage.performers[0].submissionId, f.original.id);
+    assert.equal(stage.performers[0].name, 'student');
+    assert.equal(stage.performers.length, 1);
+    assert.equal(stage.performance.clientId, undefined);
+    assert.equal((await f.second(base + `/stage/${f.original.id}/audio`)).status, 200);
+    assert.equal((await f.second(base + `/stage/${f.original.id}/image`)).status, 200);
+    assert.equal((await f.second(`/submissions/${f.original.id}/audio`)).status, 403);
+    assert.equal((await f.second(base + `/stage/${f.secondOriginal.id}/audio`)).status, 403);
+    assert.equal((await f.waiting(base + '/stage')).status, 403);
+    assert.equal((await f.stranger(base + '/stage')).status, 403);
+    assert.equal((await f.second(base + '/performance', { playing: false, activeStudentIds: [] })).status, 403);
+    assert.equal((await f.second(base + '/layout', { slot: 1, x: .4, y: .4 })).status, 403);
+    assert.equal((await f.second(base + '/arrangement', { revision: 0, bars: 2 })).status, 403);
+    const before = (await f.teacher(base)).data.classroom.arrangement;
+    await f.teacher(base + '/arrangement', { revision: before.revision, track: { studentId: f.users.student.id, steps: Array(16).fill(false) } });
+    assert.deepEqual((await f.second(base + '/stage')).data.stage.performers[0].pattern, steps);
+    assert.equal((await f.teacher(base + '/performance', { playing: true, activeStudentIds: [f.users.student.id], timeline: { ...timeline, tracks: [{ ...timeline.tracks[0], submissionId: f.secondOriginal.id }] } })).status, 400);
+    time += 31000;
+    assert.equal((await f.second(base + '/stage')).data.stage.performance.playing, false);
+    assert.equal((await f.second(base + `/stage/${f.original.id}/audio`)).status, 403);
+  } finally { await f.close(); }
+});
 
 test('playing replacements retain current media until an atomic, authorized boundary acknowledgement', async () => {
   const f = await setup(); const { teacher, student, second, stranger, room, users, original, submit } = f;

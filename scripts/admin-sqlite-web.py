@@ -23,6 +23,7 @@ SECRET_COLUMNS = {
     'image_jobs': {'claim_id'},
     'admin_accounts': {'password', 'salt', 'password_hash', 'password_salt'},
     'admin_sessions': {'token'},
+    'student_recovery_codes': {'digest', 'issuer_session'},
 }
 READ_PRAGMAS = {
     'table_info', 'table_xinfo', 'index_info', 'index_xinfo', 'index_list',
@@ -34,6 +35,12 @@ BLOCKED_FUNCTIONS = {'load_extension', 'readfile', 'writefile', 'edit', 'shell',
 
 def authorizer(action, first, second, database, source):
     if action == sqlite3.SQLITE_READ:
+        # Authentication library tables contain signed session tokens,
+        # provider credentials, OTPs, callback state and the server secret.
+        # Deny the whole namespace so new library columns cannot bypass a
+        # column-only redaction list, including SQL queries and CSV exports.
+        if (first or '').lower().startswith('student_auth_'):
+            return sqlite3.SQLITE_DENY
         if (first or '').lower() in {'sqlite_dbpage', 'sqlite_dbdata', 'sqlite_dbptr'}:
             return sqlite3.SQLITE_DENY
         if (first or '').lower() in SECRET_COLUMNS and (second or '').lower() in SECRET_COLUMNS[(first or '').lower()]:
@@ -74,6 +81,8 @@ def read_only_routes():
         abort(405)
     if request.method == 'POST' and request.endpoint not in {'generic_query', 'table_query', 'table_export'}:
         abort(403, '数据库浏览工具仅允许读取。')
+    if (request.view_args or {}).get('table', '').lower().startswith('student_auth_'):
+        abort(403, '账号凭证由登录系统管理，不提供数据库浏览。')
 
 
 class QuietHandler(WSGIRequestHandler):

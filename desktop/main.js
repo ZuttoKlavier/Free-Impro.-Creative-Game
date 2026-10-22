@@ -30,7 +30,15 @@ window.webContents.on('will-navigate', (event, url) => { if (url !== setupURL &&
 window.webContents.on('will-redirect', (event, url) => { if (!teacherNavigation(url, address)) event.preventDefault(); });
 window.webContents.on('will-attach-webview', event => event.preventDefault());
 window.webContents.session.setPermissionRequestHandler((contents, permission, callback) => callback(permission === 'fullscreen' && teacherNavigation(contents.getURL(), address)));
-window.webContents.session.setCertificateVerifyProc((request, callback) => callback(classroomCertificate(request.certificate.data, ca, request.hostname, address) ? 0 : -2));
+window.webContents.session.setCertificateVerifyProc((request, callback) => {
+  const origin = new URL(address);
+  if (origin.origin === 'https://class.empfreeimpro.xyz') {
+    // Preserve Chromium's certificate-chain, hostname and transparency checks.
+    callback(request.hostname === origin.hostname ? -3 : -2);
+    return;
+  }
+  callback(classroomCertificate(request.certificate.data, ca, request.hostname, address) ? 0 : -2);
+});
 window.webContents.session.webRequest.onBeforeRequest((details, callback) => {
   const localFiles = ['setup.html', 'setup.js', 'setup.css'].map(file => pathToFileURL(join(root, file)).href);
   callback({ cancel: !localFiles.includes(details.url) && !teacherResource(details.url, address) });

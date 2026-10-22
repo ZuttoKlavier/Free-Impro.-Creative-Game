@@ -1,0 +1,10 @@
+.student-classroom-stage { margin: 16px 0 24px; }
+.student-stage-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.student-stage-heading h3 { margin: 8px 0; }
+.student-classroom-stage .performance-stage { height: clamp(220px, 42vw, 360px); }
+.student-classroom-stage progress { width: 100%; height: 8px; margin-top: 14px; accent-color: var(--green); }
+.student-classroom-stage [data-stage-position] { color: #73816c; font-size: 12px; font-variant-numeric: tabular-nums; }
+.student-stage-performer { cursor: default; touch-action: auto; pointer-events: none; }
+.student-stage-performer .performer-art { transition: filter .06s, scale .06s; }
+.student-stage-performer.is-sounding .performer-art { filter: brightness(1.12); scale: 1.08; }
+@media (prefers-reduced-motion: reduce) { .student-stage-performer .performer-art { transition: none; } }

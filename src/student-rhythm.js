@@ -1,5 +1,7 @@
-import { listSounds, saveSounds } from './storage.js';
+import { listSounds, updateSound } from './storage.js';
 import { Sequencer } from './sequencer.js';
+import { NativeRhythmPreview } from './native-rhythm.js';
+import { resumeAudioContext } from './audio-session.js';
 import { validateRhythm, resizeSteps } from './rhythm-data.js';
 import './student-rhythm.css';
 
@@ -20,7 +22,11 @@ export function createStudentRhythm({ notify, stopPlayback, onSaved, onClosed })
   document.body.append(dialog);
   const $ = selector => dialog.querySelector(selector);
   let soundId, draft, page = 0, engine = null, generation = 0, dirty = false, saving = false, gesture = null, waterFrame = null, playbackState = null;
-  const stop = () => { generation++; engine?.dispose(); engine = null; playbackState = null; paintPlayback(); $('[data-progress]').value = 0; $('[data-play]').disabled = false; };
+  let audioWatch = null, needsAudioRecovery = false;
+  // Stop the timeline without closing its hardware context. Recreating an iOS
+  // context on every stop/replay can leave the next preview unable to resume.
+  const stop = () => { generation++; clearInterval(audioWatch); audioWatch = null; engine?.stop(); playbackState = null; paintPlayback(); $('[data-progress]').value = 0; $('[data-play]').disabled = false; };
+  const release = () => { stop(); engine?.dispose(); engine = null; needsAudioRecovery = false; };
   const edited = () => { dirty = true; if (engine?.getState().tracks.some(track => track.id === 'self')) engine.setPattern('self', draft.steps); $('[data-status]').textContent = '尚未保存；播放中的格子修改下一遍生效。'; };
   function clearWater() {
     if (waterFrame !== null) cancelAnimationFrame(waterFrame);
@@ -186,22 +192,41 @@ export function createStudentRhythm({ notify, stopPlayback, onSaved, onClosed })
   $('[data-play]').onclick = async () => {
     stopPlayback(); stop(); const ticket = generation; $('[data-play]').disabled = true;
     if (!gesture && page !== 0) { page = 0; draw(); }
-    const current = engine = new Sequencer({ onTick: state => { if (ticket === generation) followPlayback(state); } });
+    if (!engine) {
+      const Preview = window.FreeImproAudio?.playRhythm ? NativeRhythmPreview : Sequencer;
+      const created = new Preview({ volume: 1, limiter: false, onTick: state => { if (engine === created) followPlayback(state); }, onError: error => { if (!created.getState().playing) stop(); notify(error.message, true); } });
+      engine = created;
+    }
+    const current = engine;
     try {
       const context = await current.ready(); const sound = (await listSounds()).find(s => s.id === soundId);
       if (!sound) throw new Error('这份声音已被删除。');
       const buffer = await context.decodeAudioData(await sound.blob.arrayBuffer());
       if (ticket !== generation) return;
+      if (needsAudioRecovery && context.suspend) { await context.suspend(); await resumeAudioContext(context); needsAudioRecovery = false; }
+      if (ticket !== generation) return;
       current.setBars(draft.bars); current.setBpm(Number($('[data-bpm]').value));
-      current.upsertTrack({ id: 'self', submissionId: sound.id, buffer, pattern: draft.steps, position: { x: .5, y: .5 } }); current.setActive('self', true); await current.play();
+      current.upsertTrack({ id: 'self', submissionId: sound.id, buffer, pattern: draft.steps, position: { x: .5, y: .5 } }); current.setPattern('self', draft.steps); current.setActive('self', true); await current.play();
+      if (ticket !== generation) return;
+      // Leave replay available after startup, including if iOS later interrupts
+      // a context without delivering a normal end callback.
+      $('[data-play]').disabled = false;
+      if (window.FreeImproAudio?.startRecording) {
+        let lastTime = context.currentTime, movedAt = performance.now();
+        audioWatch = setInterval(() => {
+          if (ticket !== generation || !current.getState().playing) return;
+          if (context.currentTime > lastTime) { lastTime = context.currentTime; movedAt = performance.now(); }
+          else if (!document.hidden && performance.now() - movedAt > 1200) { needsAudioRecovery = true; stop(); notify('试听被系统中断，请再次点击播放试听。', true); }
+        }, 200);
+      }
     } catch (e) { if (ticket === generation) { stop(); notify(e.message, true); } }
   };
   $('[data-save]').onclick = async () => {
     if (saving) return; saving = true; $('[data-save]').disabled = true;
     try {
-      const sound = (await listSounds()).find(s => s.id === soundId); if (!sound) throw new Error('这份声音已被删除。');
       const saved = validateRhythm(draft);
-      await saveSounds([{ ...sound, rhythm: saved }]); dirty = JSON.stringify(saved) !== JSON.stringify(draft); $('[data-status]').textContent = dirty ? '已保存先前的节奏；刚才的修改尚未保存。' : '节奏已保存在这份声音中。到“我的课堂”提交节奏申请。'; await onSaved();
+      if (!await updateSound(soundId, sound => ({ ...sound, rhythm: saved }))) throw new Error('这份声音已被删除。');
+      dirty = JSON.stringify(saved) !== JSON.stringify(draft); $('[data-status]').textContent = dirty ? '已保存先前的节奏；刚才的修改尚未保存。' : '节奏已保存在这份声音中。到“我的课堂”提交节奏申请。'; await onSaved();
     } catch (e) { notify(e.message, true); } finally { saving = false; $('[data-save]').disabled = false; }
   };
   function orientationChanged() {
@@ -222,9 +247,9 @@ export function createStudentRhythm({ notify, stopPlayback, onSaved, onClosed })
   }
   window.visualViewport?.addEventListener('resize', fitViewport);
   window.visualViewport?.addEventListener('scroll', fitViewport);
-  function close() { if (saving) return; if (dirty && !confirm('节奏尚未保存，放弃本次修改？')) return; stop(); clearWater(); dialog.close(); onClosed?.(); }
-  $('[data-close]').onclick = close; dialog.oncancel = event => { event.preventDefault(); close(); }; dialog.onclose = () => { stop(); clearWater(); };
+  function close() { if (saving) return; if (dirty && !confirm('节奏尚未保存，放弃本次修改？')) return; release(); clearWater(); dialog.close(); onClosed?.(); }
+  $('[data-close]').onclick = close; dialog.oncancel = event => { event.preventDefault(); close(); }; dialog.onclose = () => { release(); clearWater(); };
   document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
   window.addEventListener('freeimpro-background', stop); window.addEventListener('pagehide', stop);
-  return { edit(sound) { stopPlayback(); stop(); soundId = sound.id; draft = sound.rhythm ? validateRhythm(sound.rhythm) : { bars: 1, steps: Array(16).fill(false) }; page = 0; dirty = false; $('[data-name]').textContent = sound.name; $('[data-status]').textContent = '点击圆点发声，向右拖动延长；保存后到“我的”提交。'; draw(); dialog.showModal(); orientationChanged(); } };
+  return { edit(sound) { stopPlayback(); release(); soundId = sound.id; draft = sound.rhythm ? validateRhythm(sound.rhythm) : { bars: 1, steps: Array(16).fill(false) }; page = 0; dirty = false; $('[data-name]').textContent = sound.name; $('[data-status]').textContent = '原声播放：时值较长时后面留空，较短时只播放开头；保存后到“我的”提交。'; draw(); dialog.showModal(); orientationChanged(); } };
 }

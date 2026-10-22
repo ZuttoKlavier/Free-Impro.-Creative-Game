@@ -10,9 +10,13 @@ import { createImageWorkflow } from './image-workflow.js';
 import { serveImageMcp } from './image-mcp.js';
 import { saveLocalImageToken } from './local-image-token.js';
 import { createLayoutStore } from './layout.js';
-import { createArrangementStore } from './arrangement.js';
+import { createArrangementStore, applySubmissionRhythm } from './arrangement.js';
+import { validateRhythm } from '../src/rhythm-data.js';
 import { createPerformanceStore } from './performance.js';
 import { createAdmin } from './admin.js';
+import { createUIDesignStore } from './ui-design.js';
+import { createStudentRecovery } from './student-recovery.js';
+import { createStudentAuth } from './student-auth.js';
 
 const hashPassword = promisify(scrypt);
 const error = (status, message) => Object.assign(new Error(message), { status });
@@ -38,7 +42,7 @@ export function validateWav(encoded) {
   return { audio, duration: length / (rate * 2) };
 }
 
-export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, performanceNow = Date.now, imageNow = Date.now, imageTokenFile = resolve(fileURLToPath(new URL('../', import.meta.url)), process.env.FREE_IMPRO_IMAGE_TOKEN_FILE || 'data/image-mcp/teacher.token') } = {}) {
+export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = false, performanceNow = Date.now, imageNow = Date.now, studentAuthOptions = {}, adminPreviewFiles, imageTokenFile = resolve(fileURLToPath(new URL('../', import.meta.url)), process.env.FREE_IMPRO_IMAGE_TOKEN_FILE || 'data/image-mcp/teacher.token') } = {}) {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
@@ -53,10 +57,12 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   const columns = db.prepare('PRAGMA table_info(submissions)').all().map(c => c.name);
   if (!columns.includes('image')) db.exec('ALTER TABLE submissions ADD COLUMN image BLOB');
   if (!columns.includes('image_kind')) db.exec('ALTER TABLE submissions ADD COLUMN image_kind TEXT');
+  if (!columns.includes('rhythm')) db.exec('ALTER TABLE submissions ADD COLUMN rhythm TEXT');
   const layout = createLayoutStore(db);
   const arrangement = createArrangementStore(db);
   const performance = createPerformanceStore(db, performanceNow);
   const images = createImageWorkflow(db, imageNow);
+  const studentRecovery = createStudentRecovery(db);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
@@ -64,7 +70,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   const authLimits = new Map();
   const cookieName = role => role ? `fi_session_${role}` : 'fi_session';
   function session(req) { const token = new RegExp('(?:^|;\\s*)' + cookieName(req.clientRole) + '=([a-f0-9]{64})(?:;|$)').exec(req.headers.cookie || '')?.[1]; return token ? { token: digest(token), user: one('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token=? AND s.expires>?', digest(token), Date.now()) } : {}; }
-  function setSession(res, userId, role) { const token = randomBytes(32).toString('hex'); run('DELETE FROM sessions WHERE expires<?', Date.now()); run('INSERT INTO sessions VALUES(?,?,?)', digest(token), userId, Date.now() + 30 * 86400000); res.setHeader('Set-Cookie', `${cookieName(role)}=${token}; HttpOnly; SameSite=Strict; Path=${role ? '/api/' + role : '/'}; Max-Age=2592000${secureCookies ? '; Secure' : ''}`); }
+  function setSession(res, userId, role, forceSecure = false) { const token = randomBytes(32).toString('hex'); run('DELETE FROM sessions WHERE expires<?', Date.now()); run('INSERT INTO sessions VALUES(?,?,?)', digest(token), userId, Date.now() + 30 * 86400000); const cookie = `${cookieName(role)}=${token}; HttpOnly; SameSite=Strict; Path=${role ? '/api/' + role : '/'}; Max-Age=2592000${secureCookies || forceSecure ? '; Secure' : ''}`; if (res) res.setHeader('Set-Cookie', [...(res.getHeader('Set-Cookie') ? [].concat(res.getHeader('Set-Cookie')) : []), cookie]); return cookie; }
   function roomFor(user, id) {
     const room = one('SELECT * FROM classrooms WHERE id=?', id); if (!room) throw error(404, '课堂不存在。');
     if (room.teacher_id !== user.id && !one('SELECT 1 FROM members WHERE class_id=? AND student_id=?', id, user.id)) throw error(403, '你尚未加入这个课堂。');
@@ -73,7 +79,8 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
   function snapshot(room, user) {
     const teacher = room.teacher_id === user.id;
     const members = all(`SELECT m.student_id,m.admitted,m.slot,u.name FROM members m JOIN users u ON u.id=m.student_id WHERE class_id=? ${teacher ? '' : 'AND student_id=?'} ORDER BY joined_at,m.rowid`, ...[room.id, ...(teacher ? [] : [user.id])]);
-    const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind FROM submissions WHERE class_id=? AND status IN ('current','pending','accepted','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
+    const submissions = all(`SELECT id,student_id,name,duration,status,created_at,image IS NOT NULL AS has_image,image_kind,rhythm FROM submissions WHERE class_id=? AND status IN ('current','pending','accepted','rejected') ${teacher ? '' : 'AND student_id=?'} ORDER BY created_at DESC`, ...[room.id, ...(teacher ? [] : [user.id])]);
+    for (const item of submissions) item.rhythm = item.rhythm ? JSON.parse(item.rhythm) : null;
     const playing = performance.read(room.id);
     for (const item of submissions) item.enabled = item.status === 'current' && playing.playing && playing.activeStudentIds.includes(item.student_id);
     const rhythm = arrangement.read(room.id);
@@ -84,7 +91,9 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
     for await (const chunk of req) { size += chunk.length; if (size > 1300000) throw error(413, '提交内容过大。'); chunks.push(chunk); }
     try { const value = JSON.parse(Buffer.concat(chunks).toString()); if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error(); return value; } catch { throw error(400, '请求内容无效。'); }
   }
-  const admin = createAdmin({ db, dbPath, secureCookies, body, layout, performance, images });
+  const uiDesign = createUIDesignStore(db);
+  const admin = createAdmin({ db, dbPath, secureCookies, body, layout, performance, images, uiDesign, adminPreviewFiles });
+  const studentAuth = createStudentAuth({ db, secureCookies, session, setSession, body, ...studentAuthOptions });
   const server = createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
@@ -98,13 +107,27 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
       const teacherClient = (req.headers['user-agent'] || '').includes('FreeImproTeacher/');
       const requiredRole = studentClient ? 'student' : teacherClient ? 'teacher' : req.clientRole;
       if (req.clientRole && requiredRole !== req.clientRole) throw error(403, '请使用对应身份的独立客户端。');
+      if (path === '/api/ui-design') {
+        if (req.method !== 'GET') throw error(405, '页面设置只能由已登录的管理员发布。');
+        send(200, uiDesign.read()); return;
+      }
       if (req.method === 'GET' && path === '/api/health') { send(200, { ok: true }); return; }
       if (req.method === 'GET' && path === '/api/image-status') { send(200, images.status(session(req).user)); return; }
       if (!['GET', 'POST'].includes(req.method)) throw error(405, '不支持的操作。');
-      if (req.method === 'POST') {
+      const appleCallback = req.clientRole === 'student' && path === '/api/auth/callback/apple' && secureCookies && req.headers.origin === 'https://appleid.apple.com';
+      if (req.method === 'POST' && !appleCallback) {
         let origin;
         try { origin = new URL(req.headers.origin); } catch { throw error(403, '请求来源无效。'); }
         if (!(secureCookies ? origin.protocol === 'https:' : ['http:', 'https:'].includes(origin.protocol)) || origin.host !== req.headers.host) throw error(403, '请从本应用页面发起操作。');
+        if (['/api/recover-identity', '/api/student-recovery-codes'].includes(path) && (origin.protocol !== 'https:' || origin.origin !== req.headers.origin)) throw error(403, '请通过 HTTPS 课堂页面恢复身份。');
+      }
+      if (await studentAuth.handle(req, res, path, send)) return;
+      if (req.method === 'POST' && path === '/api/recover-identity') {
+        if (req.clientRole !== 'student') throw error(403, '请从学生端恢复身份。');
+        const previous = session(req);
+        if (previous.user && previous.user.role !== 'student') throw error(403, '账号身份与当前客户端不符。');
+        const recovered = studentRecovery.consume(await body(req), req.socket.remoteAddress, student => { if (previous.token) run('DELETE FROM sessions WHERE token=?', previous.token); return setSession(null, student.id, 'student', true); });
+        res.setHeader('Set-Cookie', recovered.cookie); send(200, { user: publicUser(recovered.user), classId: recovered.classId }); return;
       }
       if (req.method === 'POST' && path === '/api/enter-classroom') {
         if (requiredRole !== 'student') throw error(403, '请从学生端加入课堂。');
@@ -119,7 +142,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         if (!room) throw error(404, '课堂码不正确，请向老师确认。');
         const previous = session(req), current = previous.user, name = data.name.trim();
         const student = transaction(() => {
-          let student = current?.role === 'student' && current.name === name ? current : null;
+          let student = current?.role === 'student' && (current.name === name || studentAuth.isLinked(current)) ? current : null;
           if (!student) {
             let number = 0;
             const existing = all('SELECT username FROM users WHERE name=?', name);
@@ -134,8 +157,14 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
           layout.assign(room.id, student.id);
           return student;
         });
-        if (previous.token) run('DELETE FROM sessions WHERE token=?', previous.token);
-        setSession(res, student.id, req.clientRole); send(200, { user: publicUser(student) }); return;
+        // Rejoining as the same authenticated student is not a new login.
+        // Rotating here would invalidate another in-flight entry request and
+        // let that request create a second guest identity and classroom slot.
+        if (current?.id !== student.id) {
+          if (previous.token) run('DELETE FROM sessions WHERE token=?', previous.token);
+          setSession(res, student.id, req.clientRole);
+        }
+        send(200, { user: publicUser(student) }); return;
       }
       if (req.method === 'POST' && ['/api/register', '/api/login'].includes(path)) {
         const key = req.socket.remoteAddress, now = Date.now();
@@ -145,6 +174,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         const data = await body(req);
         if (!clean(data.username, 3, 32) || !/^[a-zA-Z0-9_]+$/.test(data.username) || typeof data.password !== 'string' || data.password.length < 8 || data.password.length > 128) throw error(400, '账号使用 3–32 位字母、数字或下划线，密码使用 8–128 位字符。');
         const username = data.username.toLowerCase(); let user = one('SELECT * FROM users WHERE username=?', username);
+        if (path === '/api/login' && user?.role === 'student' && studentAuth.isLinked(user)) throw error(409, '这个学生已使用新版登录，请在“我的 → 学生账号”中登录。');
         if (path === '/api/register') {
           if (!clean(data.name, 1, 30) || !['student', 'teacher'].includes(data.role)) throw error(400, '请填写姓名并选择身份。');
           if (requiredRole && data.role !== requiredRole) throw error(403, requiredRole === 'teacher' ? '教师端只允许教师账号。' : '学生端只允许学生账号。');
@@ -165,6 +195,10 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
       }
       const { token, user } = session(req); if (!user) throw error(401, '请先登录，或重新登录以恢复连接。');
       if (requiredRole && user.role !== requiredRole) throw error(403, '账号身份与当前客户端不符，请重新登录。');
+      if (req.method === 'POST' && path === '/api/student-recovery-codes') {
+        if (req.clientRole !== 'teacher') throw error(403, '请从教师端签发恢复码。');
+        send(201, { recovery: studentRecovery.issue(user, await body(req), token) }); return;
+      }
       if (req.method === 'POST' && path === '/api/characters') {
         throw error(410, '请更新客户端，从形象页面提交图片申请。');
       }
@@ -196,7 +230,12 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         if (req.method === 'POST' && ['claim', 'complete', 'reject'].includes(action)) { const data = await body(req); const job = action === 'claim' ? images.claim(user, id, data.claimId) : action === 'complete' ? images.finish(user, id, data) : images.reject(user, id); send(200, { job }); return; }
       }
       if (req.method === 'GET' && path === '/api/me') { send(200, { user: publicUser(user) }); return; }
-      if (req.method === 'POST' && path === '/api/logout') { run('DELETE FROM sessions WHERE token=?', token); res.setHeader('Set-Cookie', `${cookieName(req.clientRole)}=; HttpOnly; SameSite=Strict; Path=${req.clientRole ? '/api/' + req.clientRole : '/'}; Max-Age=0${secureCookies ? '; Secure' : ''}`); send(200, { ok: true }); return; }
+      if (req.method === 'POST' && path === '/api/logout') {
+        if (req.clientRole === 'student') await studentAuth.signOut(req, res);
+        run('DELETE FROM sessions WHERE token=?', token);
+        res.setHeader('Set-Cookie', [...(res.getHeader('Set-Cookie') ? [].concat(res.getHeader('Set-Cookie')) : []), `${cookieName(req.clientRole)}=; HttpOnly; SameSite=Strict; Path=${req.clientRole ? '/api/' + req.clientRole : '/'}; Max-Age=0${secureCookies ? '; Secure' : ''}`]);
+        send(200, { ok: true }); return;
+      }
       if (req.method === 'GET' && path === '/api/classrooms') {
         const rooms = user.role === 'teacher' ? all('SELECT * FROM classrooms WHERE teacher_id=? ORDER BY created_at DESC', user.id) : all('SELECT c.* FROM classrooms c JOIN members m ON c.id=m.class_id WHERE student_id=? ORDER BY c.created_at DESC', user.id);
         send(200, { classrooms: rooms.map(r => snapshot(r, user)) }); return;
@@ -215,6 +254,23 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
         const room = one('SELECT * FROM classrooms WHERE code=?', data.code); if (!room) throw error(404, '没有找到这个课堂，请检查课堂码。');
         transaction(() => { const count = one('SELECT COUNT(*) AS n FROM members WHERE class_id=? AND admitted=1', room.id).n; run('INSERT OR IGNORE INTO members(class_id,student_id,admitted,joined_at) VALUES(?,?,?,?)', room.id, user.id, count < room.capacity ? 1 : 0, Date.now()); layout.assign(room.id, user.id); });
         send(200, { classroom: snapshot(room, user) }); return;
+      }
+      const stageRoute = /^\/api\/classrooms\/([^/]+)\/stage(?:\/([^/]+)\/(audio|image))?$/.exec(path);
+      if (stageRoute && req.method === 'GET') {
+        const room = roomFor(user, stageRoute[1]);
+        if (room.teacher_id !== user.id && !one('SELECT 1 FROM members WHERE class_id=? AND student_id=? AND admitted=1', room.id, user.id)) throw error(403, '进入课堂后才能观看舞台。');
+        const state = performance.stage(room.id);
+        const performers = (state.timeline?.tracks || []).map(track => {
+          const item = one("SELECT s.id,s.name,s.image IS NOT NULL AS hasImage,s.image_kind AS imageKind,u.name AS studentName FROM submissions s JOIN users u ON u.id=s.student_id WHERE s.id=? AND s.class_id=? AND s.student_id=? AND s.status='current'", track.submissionId, room.id, track.id);
+          return item && { ...track, name: item.studentName, soundName: item.name, hasImage: !!item.hasImage, imageKind: item.imageKind };
+        }).filter(Boolean);
+        if (stageRoute[2]) {
+          if (!performers.some(track => track.submissionId === stageRoute[2])) throw error(403, '这份作品未在当前舞台演奏。');
+          const item = one('SELECT audio,image FROM submissions WHERE id=?', stageRoute[2]), kind = stageRoute[3];
+          if (!item?.[kind]) throw error(404, '舞台作品已更新。');
+          res.writeHead(200, { 'Content-Type': kind === 'audio' ? 'audio/wav' : 'image/png', 'Cache-Control': 'no-store' }); res.end(Buffer.from(item[kind])); return;
+        }
+        send(200, { stage: { id: room.id, name: room.name, background: room.background, performance: { ...state, timeline: state.timeline ? { ...state.timeline, tracks: undefined } : null }, performers } }); return;
       }
       const match = /^\/api\/classrooms\/([^/]+)(?:\/(capacity|submit|layout|arrangement|performance|activate|rhythm-request|rhythm-decision))?$/.exec(path);
       if (match) {
@@ -273,10 +329,15 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
           const { audio, duration } = validateWav(data.audio);
           const image = validateImage(data.image), imageKind = image ? data.imageKind : null;
           if (image && !['avatar', 'photo'].includes(imageKind)) throw error(400, '图片类型无效。');
+          let rhythm = null;
+          if (data.rhythm !== undefined && data.rhythm !== null) {
+            try { rhythm = validateRhythm(data.rhythm); } catch (e) { throw error(400, e.message); }
+          }
           transaction(() => {
             const current = one("SELECT 1 FROM submissions WHERE class_id=? AND student_id=? AND status='current'", room.id, user.id);
             run("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND status IN ('pending','rejected')", room.id, user.id);
-            run('INSERT INTO submissions(id,class_id,student_id,request_id,name,duration,audio,status,created_at,image,image_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)', randomUUID(), room.id, user.id, data.requestId, data.name.trim(), duration, audio, current ? 'pending' : 'current', Date.now(), image, imageKind);
+            run('INSERT INTO submissions(id,class_id,student_id,request_id,name,duration,audio,status,created_at,image,image_kind,rhythm) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', randomUUID(), room.id, user.id, data.requestId, data.name.trim(), duration, audio, current ? 'pending' : 'current', Date.now(), image, imageKind, rhythm ? JSON.stringify(rhythm) : null);
+            if (!current && rhythm) applySubmissionRhythm(db, { class_id: room.id, student_id: user.id, rhythm });
           });
           send(201, { classroom: snapshot(room, user) }); return;
         }
@@ -297,6 +358,7 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
             if (one('SELECT status FROM submissions WHERE id=?', item.id)?.status !== 'pending') throw error(409, '申请已更新，请刷新后处理最新申请。');
             if (sub[2] === 'accept') run("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND (status='accepted' OR (status='current' AND ?='current'))", room.id, item.student_id, next);
             run('UPDATE submissions SET status=? WHERE id=?', next, item.id);
+            if (next === 'current') applySubmissionRhythm(db, item);
           });
           send(200, { classroom: snapshot(room, user) }); return;
         }

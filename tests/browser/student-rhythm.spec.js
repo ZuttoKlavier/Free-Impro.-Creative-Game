@@ -18,7 +18,7 @@ test('student queues rhythm offline, teacher accepts and receives the pattern', 
     const { saveSounds } = await import('/src/storage.js'), { encodeWav } = await import('/src/audio.js');
     await saveSounds([{ id: 'rhythm-work', name: '我的节奏', createdAt: Date.now(), duration: .1, blob: encodeWav(new Float32Array(2400), 24000), rhythm: { bars: 1, steps: Array.from({ length: 16 }, (_, i) => i === 3 ? 4 : false) } }]);
   });
-  await page.reload(); await page.locator('#classroom-tab').click(); await expect(page.locator('#send-rhythm')).toBeEnabled();
+  await page.reload(); await page.locator('#classroom-tab').click(); await expect(page.locator('#open-my-classroom')).toBeEnabled(); await page.locator('#open-my-classroom').click(); await expect(page.locator('#send-rhythm')).toBeEnabled();
   await page.route('**/api/student/**', route => route.abort()); await page.locator('#send-rhythm').click();
   await expect(page.locator('#outbox-panel')).toContainText('我的节奏');
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/storage.js')).outbox('list')).some(item => item.kind === 'rhythm' && item.error))).toBe(true);

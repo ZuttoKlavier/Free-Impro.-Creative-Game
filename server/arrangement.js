@@ -2,7 +2,17 @@ import { validateRhythm, fitRhythm, resizeSteps, validStep } from '../src/rhythm
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const keysAre = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 
-// Rhythm belongs to a student in a classroom, so accepting a new sample preserves it.
+// A replacement without a draft keeps the classroom rhythm. A submitted draft
+// takes effect together with its sample, after acceptance and any loop boundary.
+export function applySubmissionRhythm(db, submission) {
+  if (!submission.rhythm) return;
+  const rhythm = validateRhythm(typeof submission.rhythm === 'string' ? JSON.parse(submission.rhythm) : submission.rhythm);
+  db.prepare('INSERT OR IGNORE INTO classroom_arrangements VALUES(?,1,0)').run(submission.class_id);
+  const { bars } = db.prepare('SELECT bars FROM classroom_arrangements WHERE class_id=?').get(submission.class_id);
+  db.prepare('INSERT INTO classroom_rhythm_tracks VALUES(?,?,?) ON CONFLICT(class_id,student_id) DO UPDATE SET steps=excluded.steps').run(submission.class_id, submission.student_id, JSON.stringify(fitRhythm(rhythm, bars)));
+  db.prepare('UPDATE classroom_arrangements SET revision=revision+1 WHERE class_id=?').run(submission.class_id);
+}
+
 export function createArrangementStore(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS classroom_arrangements(

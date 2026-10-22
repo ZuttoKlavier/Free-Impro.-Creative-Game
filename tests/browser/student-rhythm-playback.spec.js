@@ -4,7 +4,7 @@ import { setTempoTouch } from './rhythm-touch-controls.js';
 test.use({ hasTouch: true });
 
 // Drive the real sequencer with a controllable AudioContext. Scheduled sources
-// keep their actual start times and stretched buffers; UI rAF remains real.
+// keep their original buffers, offsets and playback cutoffs; UI rAF remains real.
 async function controlledClock(page) {
   await page.addInitScript(() => {
     const buffer = (channels, length, sampleRate) => {
@@ -17,7 +17,7 @@ async function controlledClock(page) {
       createBuffer(...args) { return buffer(...args); }
       createBufferSource() {
         const context = this;
-        const source = { connect() {}, disconnect() {}, start(time) { this.time = time; }, stop() { this.stoppedAt = context.currentTime; } };
+        const source = { playbackRate: { value: 1 }, detune: { value: 0 }, connect() {}, disconnect() {}, start(time, offset, duration) { Object.assign(this, { time, offset, duration }); }, stop() { this.stoppedAt = context.currentTime; } };
         this.sources.push(source); return source;
       }
       async decodeAudioData() { if (window.__deferDecode) await new Promise(resolve => { window.__resumeDecode = resolve; }); return buffer(1, Math.round((window.__sampleDuration || .04) * 24000), 24000); }
@@ -51,11 +51,12 @@ async function advance(page, target) {
     const context = window.__rhythmClock, engine = window.__previewEngine;
     while (context.currentTime < target - 1e-9) { context.currentTime = Math.min(target, context.currentTime + .005); engine._pump(); }
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  }, target);
+  }, target + await page.evaluate(() => window.__previewBaseTime || 0));
 }
 async function play(page) {
   await page.getByRole('button', { name: '播放试听', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__previewEngine?.getState().playing)).toBe(true);
+  await page.evaluate(() => { window.__previewBaseTime = window.__previewEngine._startTime - .025; });
 }
 async function savedSteps(page) { return page.evaluate(async () => (await (await import('/src/storage.js')).listSounds())[0].rhythm.steps); }
 const pattern = (bars, notes) => Array.from({ length: bars * 16 }, (_, i) => notes[i] || false);
@@ -82,15 +83,20 @@ test('preview starts at bar one and follows audible boundaries rather than looka
   await advance(page, 2.025); expect(await selectedBar(page)).toBe('1'); expect(await activeSteps(page)).toEqual([]);
 });
 
-test('held notes highlight their whole block through the actual stretched duration; rests and finished short hits stay unlit', async ({ page }) => {
+test('held notes play the original recording once and leave the rest of their block silent and unlit', async ({ page }) => {
   await controlledClock(page); await openEditor(page, pattern(1, { 3: 5, 10: true })); await play(page);
   await advance(page, .15); expect(await activeSteps(page)).toEqual([]);
   await advance(page, .223); expect(await activeSteps(page)).toEqual([3, 4, 5, 6, 7]);
   await expect(page.locator('[data-water-shapes] .is-playing')).toHaveCount(1);
   await expect(page.locator('[data-playback-shapes] [data-playing-length="5"]')).toHaveCount(1);
-  expect(await page.evaluate(() => window.__rhythmClock.sources.find(source => Math.abs(source.time - .2125) < 1e-6).buffer.duration)).toBeCloseTo(.3125, 5);
-  await advance(page, .35); expect(await activeSteps(page)).toEqual([3, 4, 5, 6, 7]);
-  await advance(page, .524); expect(await activeSteps(page)).toHaveLength(5);
+  expect(await page.evaluate(() => {
+    const source = window.__rhythmClock.sources.find(source => Math.abs(source.time - .2125) < 1e-6);
+    return { bufferDuration: source.buffer.duration, offset: source.offset, duration: source.duration, rate: source.playbackRate.value, detune: source.detune.value };
+  })).toEqual({ bufferDuration: .04, offset: 0, duration: .04, rate: 1, detune: 0 });
+  await advance(page, .253); expect(await activeSteps(page)).toEqual([]);
+  expect(await page.evaluate(() => window.__previewEngine.getState().step)).toBe(3);
+  await advance(page, .35); expect(await activeSteps(page)).toEqual([]);
+  await advance(page, .524); expect(await activeSteps(page)).toEqual([]);
   await advance(page, .526); expect(await activeSteps(page)).toEqual([]); await expect(page.locator('[data-playback-shapes] g')).toHaveCount(0);
   await advance(page, .66); expect(await activeSteps(page)).toEqual([10]);
   await advance(page, .691); expect(await activeSteps(page)).toEqual([]);
@@ -99,7 +105,7 @@ test('held notes highlight their whole block through the actual stretched durati
 });
 
 test('edits highlight only the committed sounding pattern until the next loop and never change saved data during preview', async ({ page }) => {
-  await controlledClock(page); const steps = pattern(1, { 0: 6 }); await openEditor(page, steps); await play(page); await advance(page, .05);
+  await controlledClock(page); const steps = pattern(1, { 0: 6 }); await openEditor(page, steps, 1, .4); await play(page); await advance(page, .05);
   await page.locator('[data-step="4"]').evaluate(cell => cell.click()); await paint(page);
   expect(await activeSteps(page)).toEqual([0, 1, 2, 3, 4, 5]);
   await expect(page.locator('[data-water-shapes] .is-playing')).toHaveCount(0);
@@ -113,12 +119,17 @@ test('edits highlight only the committed sounding pattern until the next loop an
   await expect(page.locator('[data-status]')).toContainText('节奏已保存'); expect(await savedSteps(page)).toEqual(pattern(1, { 4: true }));
 });
 
-test('single-hit tails remain highlighted over silent steps and overlapping hits clear at their separate audio ends', async ({ page }) => {
+test('single hits play only the original prefix and stop before later silent steps or hits', async ({ page }) => {
   await controlledClock(page); await openEditor(page, pattern(1, { 0: true, 2: true }), 1, .2); await play(page);
-  await advance(page, .12); expect(await activeSteps(page)).toEqual([0]);
+  await advance(page, .08); expect(await activeSteps(page)).toEqual([0]);
+  expect(await page.evaluate(() => {
+    const source = window.__rhythmClock.sources[0];
+    return { bufferDuration: source.buffer.duration, offset: source.offset, duration: source.duration, rate: source.playbackRate.value };
+  })).toEqual({ bufferDuration: .2, offset: 0, duration: .0625, rate: 1 });
+  await advance(page, .089); expect(await activeSteps(page)).toEqual([]);
   expect(await page.evaluate(() => window.__previewEngine.getState().step)).toBe(1);
-  await advance(page, .16); expect(await activeSteps(page)).toEqual([0, 2]);
-  await advance(page, .226); expect(await activeSteps(page)).toEqual([2]);
+  await advance(page, .16); expect(await activeSteps(page)).toEqual([2]);
+  await advance(page, .214); expect(await activeSteps(page)).toEqual([]);
   await advance(page, .351); expect(await activeSteps(page)).toEqual([]);
   await expect(page.locator('[data-playback-shapes] g')).toHaveCount(0);
 });
@@ -137,7 +148,7 @@ test('stop, restart, background, pagehide, hidden document, portrait, and close 
 });
 
 test('tempo changes leave an already sounding held block highlighted until its fixed audio end time', async ({ page }) => {
-  await controlledClock(page); await openEditor(page, pattern(1, { 0: 8 })); await play(page); await advance(page, .05);
+  await controlledClock(page); await openEditor(page, pattern(1, { 0: 8 }), 1, .8); await play(page); await advance(page, .05);
   await setTempoTouch(page, 40);
   await advance(page, .524); expect(await activeSteps(page)).toHaveLength(8);
   await advance(page, .526); expect(await activeSteps(page)).toEqual([]);
@@ -167,8 +178,34 @@ test('editing during audio decoding keeps the latest draft without trying to upd
   await advance(page, .151); expect(await activeSteps(page)).toEqual([2]); expect(errors).toEqual([]);
 });
 
+test('saving a sounding rhythm keeps its preview and detail alive and can replay after stopping', async ({ page }) => {
+  await controlledClock(page); const steps = pattern(2, { 0: true, 16: true }); await openEditor(page, steps);
+  await play(page); await advance(page, .026); expect(await activeSteps(page)).toEqual([0]);
+  await page.evaluate(() => { window.__contextBeforeSave = window.__rhythmClock; window.__detailBeforeSave = document.querySelector('.sound-play'); });
+  await page.getByRole('button', { name: '保存节奏', exact: true }).click();
+  await expect(page.locator('[data-status]')).toContainText('节奏已保存');
+  await expect(page.locator('.student-rhythm')).toBeVisible();
+  await expect(page.getByRole('button', { name: '播放试听', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => window.__previewEngine.getState().playing)).toBe(true);
+  expect(await page.evaluate(() => window.__detailBeforeSave === document.querySelector('.sound-play'))).toBe(true);
+  expect(await savedSteps(page)).toEqual(steps);
+  await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await advance(page, 1.026); expect(await selectedBar(page)).toBe('2'); expect(await activeSteps(page)).toEqual([0]);
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  expect(await page.evaluate(() => window.__contextBeforeSave.state)).toBe('running');
+  await play(page); await advance(page, .026);
+  expect(await page.evaluate(() => window.__rhythmClock === window.__contextBeforeSave)).toBe(true);
+  expect(await selectedBar(page)).toBe('1'); expect(await activeSteps(page)).toEqual([0]);
+  await page.getByRole('button', { name: '返回声音库', exact: true }).click();
+  await expect(page.locator('.student-rhythm')).toBeHidden(); await expect(page.locator('#library-view')).toBeVisible();
+  await page.locator('.sound-open').click(); await page.getByRole('button', { name: '节奏编创', exact: true }).click();
+  await expect(page.locator('[data-bars]')).toHaveText('2');
+  await expect(page.locator('[data-step="0"]')).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('real silent audio rendering drives page following and whole-block highlighting', async ({ page }) => {
-  await useSilentAudioClock(page); await openEditor(page, pattern(2, { 0: 8, 16: 8 })); await play(page);
+  await useSilentAudioClock(page); await openEditor(page, pattern(2, { 0: 8, 16: 8 }), 2, .8); await play(page);
+  expect(await page.evaluate(() => ({ gain: window.__previewEngine._master.gain.value, limiter: Boolean(window.__previewEngine._limiter) }))).toEqual({ gain: 1, limiter: false });
   await expect.poll(() => activeSteps(page)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
   await expect.poll(() => selectedBar(page)).toBe('2'); await expect.poll(() => activeSteps(page)).toHaveLength(8);
   await expect.poll(() => selectedBar(page)).toBe('1');
@@ -176,11 +213,61 @@ test('real silent audio rendering drives page following and whole-block highligh
 });
 
 test('a scheduling stall recovers highlights for already sounding held audio without replaying missed notes', async ({ page }) => {
-  await controlledClock(page); await openEditor(page, pattern(1, { 0: 4 }));
+  await controlledClock(page); await openEditor(page, pattern(1, { 0: 4 }), 1, .4);
   await setTempoTouch(page, 100); await play(page);
   await page.evaluate(() => { window.__rhythmClock.currentTime = .25; window.__previewEngine._pump(); }); await paint(page);
   expect(await activeSteps(page)).toEqual([0, 1, 2, 3]);
   await expect(page.locator('[data-playback-shapes] [data-playing-length="4"]')).toHaveCount(1);
   expect(await page.evaluate(() => window.__rhythmClock.sources.filter(source => source.stoppedAt === undefined).map(source => source.time))).toEqual([.025]);
-  await advance(page, .626); expect(await activeSteps(page)).toEqual([]);
+  await advance(page, .426); expect(await activeSteps(page)).toEqual([]);
+});
+
+test('real audio rendering preserves recorded stereo samples and leaves silence after the original or slot end', async ({ page }) => {
+  await page.goto('/');
+  const results = await page.evaluate(async () => {
+    const { Sequencer } = await import('/src/sequencer.js');
+    const results = [];
+    for (const { note, duration, playedDuration } of [
+      { note: 4, duration: .1, playedDuration: .1 },
+      { note: 4, duration: .4, playedDuration: .25 },
+      { note: true, duration: .4, playedDuration: .0625 },
+    ]) {
+      const sampleRate = 8000;
+      const context = new OfflineAudioContext(2, sampleRate / 2, sampleRate);
+      const recording = context.createBuffer(2, duration * sampleRate, sampleRate);
+      for (let channel = 0; channel < 2; channel += 1) {
+        const samples = recording.getChannelData(channel);
+        for (let i = 0; i < samples.length; i += 1) samples[i] = .2 * Math.sin(i * .23 + channel) + .1 * Math.cos(i * .13);
+      }
+      const original = [recording.getChannelData(0).slice(), recording.getChannelData(1).slice()];
+      const engine = new Sequencer({ context, autoSchedule: false, volume: 1, limiter: false });
+      engine.setBpm(240);
+      const steps = Array(16).fill(false); steps[0] = note;
+      engine.upsertTrack({ id: 'original', submissionId: 'recording', buffer: recording, pattern: steps });
+      engine.setActive('original', true);
+      await engine.ready();
+      engine._scheduleEvent(.025, 0, 0, engine._model, false);
+      const rendered = await context.startRendering();
+      const startFrame = Math.round(.025 * sampleRate), playedFrames = Math.round(playedDuration * sampleRate);
+      let maxPrefixError = 0, maxSilence = 0, maxRecordingError = 0;
+      for (let channel = 0; channel < 2; channel += 1) {
+        const output = rendered.getChannelData(channel), input = recording.getChannelData(channel);
+        for (let i = 0; i < output.length; i += 1) {
+          const sourceFrame = i - startFrame;
+          if (sourceFrame >= 0 && sourceFrame < playedFrames) maxPrefixError = Math.max(maxPrefixError, Math.abs(output[i] - original[channel][sourceFrame]));
+          else maxSilence = Math.max(maxSilence, Math.abs(output[i]));
+        }
+        for (let i = 0; i < input.length; i += 1) maxRecordingError = Math.max(maxRecordingError, Math.abs(input[i] - original[channel][i]));
+      }
+      results.push({ note, maxPrefixError, maxSilence, maxRecordingError });
+      engine.dispose();
+    }
+    return results;
+  });
+  expect(results).toHaveLength(3);
+  for (const result of results) {
+    expect(result.maxPrefixError).toBeLessThan(1e-7);
+    expect(result.maxSilence).toBe(0);
+    expect(result.maxRecordingError).toBe(0);
+  }
 });

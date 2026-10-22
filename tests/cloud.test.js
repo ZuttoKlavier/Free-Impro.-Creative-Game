@@ -33,7 +33,7 @@ async function fixture(t) {
       const chunks = []; res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => {
         const bytes = Buffer.concat(chunks), text = bytes.toString();
-        resolve({ status: res.statusCode, headers: res.headers, text, bytes, data: res.headers['content-type']?.includes('application/json') ? JSON.parse(text) : null });
+        resolve({ status: res.statusCode, headers: res.headers, text, bytes, data: res.headers['content-type']?.includes('application/json') && text ? JSON.parse(text) : null });
       });
     });
     req.on('error', reject); req.end(body);
@@ -93,6 +93,25 @@ test('cloud rejects incorrect Host and Origin without granting authority to forw
   assert.equal((await app.send('/api/health', { headers: { Origin: publicOrigin, ...forwarded, 'X-Forwarded-Host': 'localhost', 'X-Forwarded-Proto': 'http' } })).status, 200);
   for (const origin of ['http://' + host, publicOrigin + '/teacher.html', publicOrigin + ':443', 'null']) assert.equal((await app.send('/api/teacher/register', { method: 'POST', headers: { Origin: origin, ...forwarded }, body: '{}' })).status, 403, origin);
   assert.equal((await app.send('/api/teacher/register', { method: 'POST', body: '{}' })).status, 403);
+});
+
+test('Apple cross-origin POST is allowed only at the exact callback and still requires verified OAuth state', async t => {
+  const app = await fixture(t);
+  const headers = { Origin: 'https://appleid.apple.com', 'Content-Type': 'application/x-www-form-urlencoded' };
+  const callback = await app.send('/api/student/auth/callback/apple', { method: 'POST', headers, body: 'state=missing-synthetic-state&code=synthetic-invalid-code' });
+  // The trusted callback origin reaches the student authentication guard,
+  // which still rejects a request without a valid initiating intent.
+  assert.equal(callback.status, 403);
+  assert.equal(callback.data?.error, '登录回调已过期或已使用，请重新登录。');
+  assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM users').get().n, 0);
+  assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n, 0);
+  for (const path of ['/api/student/account/register', '/api/student/account/login', '/api/teacher/register', '/api/student/auth/callback/wechat', '/api/student/auth/callback/apple/']) {
+    assert.equal((await app.send(path, { method: 'POST', headers, body: '{}' })).status, 403, path);
+  }
+  assert.equal((await app.send('/api/student/auth/callback/apple', { headers })).status, 403);
+  for (const origin of ['https://appleid.apple.com/', 'https://appleid.apple.com.evil.example', 'https://APPLEID.apple.com', 'http://appleid.apple.com']) {
+    assert.equal((await app.send('/api/student/auth/callback/apple', { method: 'POST', headers: { ...headers, Origin: origin }, body: '{}' })).status, 403, origin);
+  }
 });
 
 test('cloud runs real secure classroom submission flow and denies local credential saving', async t => {

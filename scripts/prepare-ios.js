@@ -1,19 +1,26 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { X509Certificate } from 'node:crypto';
 import { PNG } from 'pngjs';
 import { buildStudentDocument } from './ios-offline-build.js';
+import { parseStudentPackageAddress, resolveStudentPackageAddress } from './student-package-address.js';
+
+// Validate the fixed public target before building or writing generated assets.
+// Retain only the legacy CA public certificate for local-origin compatibility.
+const selectedAddress = parseStudentPackageAddress(process.argv.slice(2));
+const classroomUrl = resolveStudentPackageAddress(selectedAddress);
+const classroomCa = new X509Certificate(readFileSync('data/https/classroom-ca.crt'));
 mkdirSync('ios/Generated', { recursive: true });
 writeFileSync('ios/Generated/student.html', await buildStudentDocument());
-
-const config = JSON.parse(readFileSync('data/https/config.json', 'utf8'));
-const text = readFileSync('data/https/classroom-ca.crt', 'utf8');
-const pem = /-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/.exec(text);
-if (!pem) throw new Error('请先执行 npm run setup:https 准备课堂 CA 公钥。');
 mkdirSync('ios/Generated/Assets.xcassets/AppIcon.appiconset', { recursive: true });
-writeFileSync('ios/Generated/classroom-ca.der', Buffer.from(pem[1].replace(/\s/g, ''), 'base64'));
-writeFileSync('ios/Generated/classroom.json', JSON.stringify({ url: `https://${config.preferredHost}:${config.httpsPort || 8443}/` }, null, 2));
+writeFileSync('ios/Generated/classroom-ca.der', classroomCa.raw);
+writeFileSync('ios/Generated/classroom.json', JSON.stringify({ url: classroomUrl }, null, 2));
 const images = [];
 // Render the existing music-note identity as native app-icon sizes, without external artwork.
-for (const [size, scale, idiom] of [[20,2,'iphone'],[20,3,'iphone'],[29,2,'iphone'],[29,3,'iphone'],[40,2,'iphone'],[40,3,'iphone'],[60,2,'iphone'],[60,3,'iphone'],[1024,1,'ios-marketing']]) {
+for (const [size, scale, idiom] of [
+  [20,2,'iphone'],[20,3,'iphone'],[29,2,'iphone'],[29,3,'iphone'],[40,2,'iphone'],[40,3,'iphone'],[60,2,'iphone'],[60,3,'iphone'],
+  [20,1,'ipad'],[20,2,'ipad'],[29,1,'ipad'],[29,2,'ipad'],[40,1,'ipad'],[40,2,'ipad'],[76,1,'ipad'],[76,2,'ipad'],[83.5,2,'ipad'],
+  [1024,1,'ios-marketing'],
+]) {
   const width = size * scale, png = new PNG({ width, height: width });
   for (let y = 0; y < width; y++) for (let x = 0; x < width; x++) {
     const u = x / width * 512, v = y / width * 512;
@@ -52,4 +59,4 @@ for (const scale of [1, 2, 3]) {
 writeFileSync('ios/Generated/Assets.xcassets/LaunchLogo.imageset/Contents.json', JSON.stringify({ images: logos, info: { author: 'xcode', version: 1 } }));
 mkdirSync('ios/Generated/Assets.xcassets/LaunchBackground.colorset', { recursive: true });
 writeFileSync('ios/Generated/Assets.xcassets/LaunchBackground.colorset/Contents.json', JSON.stringify({ colors: [{ idiom: 'universal', color: { 'color-space': 'srgb', components: { red: '1.000', green: '1.000', blue: '1.000', alpha: '1.000' } } }], info: { author: 'xcode', version: 1 } }));
-console.log('已准备 iPhone 离线学生页面、白灰启动 Logo、课堂公钥和默认地址；未包含教师页面或私钥。');
+console.log(`已准备 iPhone / iPad 离线学生页面、白灰启动 Logo、课堂公钥和固定地址 ${classroomUrl}；未包含教师页面或私钥。`);

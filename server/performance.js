@@ -1,3 +1,5 @@
+import { applySubmissionRhythm } from './arrangement.js';
+import { validateRhythm } from '../src/rhythm-data.js';
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
 export function createPerformanceStore(db, now = Date.now) {
@@ -7,6 +9,10 @@ export function createPerformanceStore(db, now = Date.now) {
   const read = id => {
     const state = live(id);
     return { playing: !!state, activeStudentIds: state?.activeStudentIds || [], updatedAt: sessions.get(id)?.updatedAt ?? null };
+  };
+  const stage = id => {
+    const state = live(id);
+    return { ...read(id), timeline: state?.timeline || null, serverNow: now() };
   };
   function checkOwner(id, clientId) {
     const current = live(id);
@@ -18,7 +24,19 @@ export function createPerformanceStore(db, now = Date.now) {
     for (const studentId of data.activeStudentIds) {
       if (!db.prepare("SELECT 1 FROM members m JOIN submissions s ON s.class_id=m.class_id AND s.student_id=m.student_id WHERE m.class_id=? AND m.student_id=? AND m.admitted=1 AND s.status='current'").get(id, studentId)) throw failure(400, '参与演奏的学生需已入课并提交声音。');
     }
-    sessions.set(id, { ...data, activeStudentIds: [...data.activeStudentIds], updatedAt: now() });
+    let timeline = null;
+    if (data.playing && data.timeline != null) {
+      const t = data.timeline;
+      if (!Number.isFinite(t.bpm) || t.bpm < 40 || t.bpm > 240 || !Number.isFinite(t.swing) || t.swing < 0 || t.swing > .5 || !Number.isFinite(t.volume) || t.volume < 0 || t.volume > 1 || !Number.isInteger(t.bars) || t.bars < 1 || t.bars > 16 || !Number.isSafeInteger(t.loop) || t.loop < 0 || !Number.isFinite(t.remaining) || t.remaining < 0 || t.remaining > t.bars * 240 / t.bpm + 1 || !Array.isArray(t.tracks) || t.tracks.length !== data.activeStudentIds.length || new Set(t.tracks.map(track => track.id)).size !== t.tracks.length) throw failure(400, '舞台同步状态无效。');
+      const tracks = t.tracks.map(track => {
+        if (!data.activeStudentIds.includes(track.id) || !Number.isFinite(track.volume) || track.volume < 0 || track.volume > 1 || ![track.position?.x, track.position?.y].every(n => Number.isFinite(n) && n >= 0 && n <= 1) || !db.prepare("SELECT 1 FROM submissions WHERE id=? AND class_id=? AND student_id=? AND status='current'").get(track.submissionId, id, track.id)) throw failure(400, '舞台声部无效。');
+        let pattern;
+        try { pattern = validateRhythm({ bars: t.bars, steps: track.pattern }).steps; } catch { throw failure(400, '舞台节奏无效。'); }
+        return { id: track.id, submissionId: track.submissionId, pattern, volume: track.volume, position: { x: track.position.x, y: track.position.y } };
+      });
+      timeline = { bpm: t.bpm, swing: t.swing, volume: t.volume, bars: t.bars, loop: t.loop, remaining: t.remaining, tracks };
+    }
+    sessions.set(id, { clientId: data.clientId, playing: data.playing, activeStudentIds: [...data.activeStudentIds], timeline, updatedAt: now() });
   }
   function activate(id, data) {
     checkOwner(id, data.clientId);
@@ -34,9 +52,10 @@ export function createPerformanceStore(db, now = Date.now) {
       for (const item of items) if (item.status === 'accepted') {
         db.prepare("UPDATE submissions SET status='superseded',audio=NULL,image=NULL WHERE class_id=? AND student_id=? AND status='current'").run(id, item.student_id);
         db.prepare("UPDATE submissions SET status='current' WHERE id=?").run(item.id);
+        applySubmissionRhythm(db, item);
       }
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }
-  return { read, report, activate, checkOwner };
+  return { read, stage, report, activate, checkOwner };
 }

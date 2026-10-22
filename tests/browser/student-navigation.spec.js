@@ -7,11 +7,45 @@ test('phone bottom navigation separates library, recording and account without b
   await page.locator('#library-tab').click(); await expect(page.locator('#library-view')).toBeVisible();
   await expect(page.locator('#characters-tab')).toBeHidden();
   await expect(page.locator('#library-tab')).toHaveAttribute('aria-current', 'page');
-  await page.locator('#classroom-tab').click(); await expect(page.locator('#auth-panel')).toBeVisible();
+  await page.locator('#classroom-tab').click();
+  await expect(page.locator('#open-my-classroom')).toBeVisible();
+  await expect(page.locator('#open-my-classroom')).toBeEnabled();
+  await expect(page.locator('#open-my-avatar')).toBeDisabled();
+  await expect(page.locator('#auth-panel')).toBeHidden();
+  await page.locator('#open-my-classroom').click(); await expect(page.locator('#auth-panel')).toBeVisible();
   await expect(page.locator('#account-shortcut')).toHaveCount(0); await expect(page.locator('.auth-tabs')).toBeHidden();
   await expect(page.locator('#studio-tab')).toBeEnabled();
   const bounds = await nav.boundingBox(); expect(bounds.y + bounds.height).toBeLessThanOrEqual(845);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('signed-in students open classroom and avatar as separate pages before submitting a work', async ({ page }) => {
+  const headers = { Origin: process.env.TEST_APP_ORIGIN };
+  await page.request.post('/api/teacher/register', { headers, data: { username: 'teacher_' + crypto.randomUUID().slice(0, 8), password: 'password123', name: '导航测试教师', role: 'teacher' } });
+  const created = await page.request.post('/api/teacher/classrooms', { headers, data: { name: '二级页面课堂', capacity: 15, background: '操场' } });
+  const room = (await created.json()).classroom;
+  await page.request.post('/api/student/enter-classroom', { headers, data: { name: '导航学生', code: room.code } });
+  await page.goto('/');
+  await page.locator('#classroom-tab').click();
+  await expect(page.locator('#open-my-avatar')).toBeEnabled();
+  await expect(page.locator('#student-classroom-home .student-subpage-card')).toHaveText(['01我的课堂1 个课堂，点击进入', '02我的形象查看和制作自己的形象']);
+  await expect(page.locator('#classroom-content')).toBeHidden();
+  await expect(page.locator('#student-image-profile')).toBeHidden();
+  await page.locator('#open-my-classroom').click();
+  await expect(page.locator('.room-title h2')).toHaveText('二级页面课堂');
+  await expect(page.locator('#student-account')).toBeHidden();
+  await expect(page.locator('#student-avatar-view')).toBeHidden();
+  await expect(page.locator('#room-detail')).not.toContainText('短节奏重复填满');
+  await page.locator('#classroom-back').click();
+  await expect(page.locator('#student-account')).toBeVisible();
+  await page.locator('#open-my-avatar').click();
+  await expect(page.locator('#student-avatar-view')).toBeVisible();
+  await expect(page.locator('#student-image-profile')).toBeVisible();
+  await expect(page.locator('#classroom-content')).toBeHidden();
+  await expect(page.locator('#student-account')).toBeHidden();
+  await page.locator('#student-avatar-back').click();
+  await expect(page.locator('#student-classroom-home')).toBeVisible();
+  await expect(page.locator('#student-avatar-view')).toBeHidden();
 });
 
 test('holding record stays in library until release then opens trim', async ({page}) => {

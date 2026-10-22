@@ -34,7 +34,13 @@ test('trim rejects overlong, empty or invalid range; WAV has actual PCM duration
   const view = new DataView(await encodeWav(result, sampleRate).arrayBuffer());
   assert.equal(view.getUint32(24, true), sampleRate);
   assert.equal(view.getUint32(40, true), sampleRate * 2);
-  assert.equal(Math.abs(result[0]), 0); assert.equal(Math.abs(result.at(-1)), 0);
+  assert.deepEqual(result, samples.slice(Math.round(.3 * sampleRate), Math.round(1.3 * sampleRate)));
+});
+test('cropping preserves every selected sample including nonzero boundaries', () => {
+  const rate = 24000, samples = Float32Array.from({ length: 480 }, (_, i) => .3 + .2 * Math.sin(i * .17));
+  const original = samples.slice();
+  assert.deepEqual(trimSamples(samples, rate, .005, .015), original.slice(120, 360));
+  assert.deepEqual(samples, original);
 });
 test('library limit is atomic, replacement does not consume a slot, failed import leaves data intact', async () => {
   const items = Array.from({ length: 200 }, (_, i) => ({ id: String(i), name: 'test', createdAt: i }));

@@ -33,6 +33,7 @@ public final class TeacherActivity extends Activity {
         web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(layout);
         WebView.setWebContentsDebuggingEnabled(false);
         WebSettings options = web.getSettings(); options.setJavaScriptEnabled(true); options.setDomStorageEnabled(true); options.setAllowFileAccess(false); options.setAllowContentAccess(false); options.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW); options.setSupportMultipleWindows(true); options.setJavaScriptCanOpenWindowsAutomatically(false); options.setGeolocationEnabled(false); options.setUserAgentString(options.getUserAgentString() + " FreeImproTeacher/1");
+        options.setUseWideViewPort(true); options.setLoadWithOverviewMode(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
         web.setOnLongClickListener(v -> true);
         web.setWebViewClient(new WebViewClient() {

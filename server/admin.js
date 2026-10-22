@@ -2,6 +2,8 @@ import { randomBytes, randomUUID, createHash, scrypt, timingSafeEqual } from 'no
 import { promisify } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { createAdminDatabase } from './admin-database.js';
+import { createAdminPreview } from './admin-preview.js';
+import { hashPassword as hashStudentPassword } from 'better-auth/crypto';
 
 const hashPassword = promisify(scrypt);
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -45,9 +47,10 @@ export async function provisionAdmin(db, { username, password, name = '管理员
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 
-export function createAdmin({ db, dbPath, secureCookies, body, layout, performance, images }) {
+export function createAdmin({ db, dbPath, secureCookies, body, layout, performance, images, uiDesign, adminPreviewFiles }) {
   initializeAdmin(db);
   const database = createAdminDatabase({ dbPath });
+  const preview = createAdminPreview(adminPreviewFiles);
   const one = (sql, ...args) => db.prepare(sql).get(...args);
   const run = (sql, ...args) => db.prepare(sql).run(...args);
   const all = (sql, ...args) => db.prepare(sql).all(...args);
@@ -65,6 +68,31 @@ export function createAdmin({ db, dbPath, secureCookies, body, layout, performan
   }
   function fields(data, permitted) { if (Object.keys(data).some(key => !permitted.includes(key))) throw fail(400, '包含不支持的修改。'); }
   const existing = (table, id) => { const row = one(`SELECT * FROM ${table} WHERE id=?`, id); if (!row) throw fail(404, '记录不存在。'); return row; };
+  const hasTable = name => Boolean(one("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", name));
+  const studentAuthLink = id => hasTable('student_auth_links') ? one('SELECT auth_user_id FROM student_auth_links WHERE student_id=?', id) : null;
+  function revokeUserSessions(id) {
+    run('DELETE FROM sessions WHERE user_id=?', id);
+    run('DELETE FROM image_mcp_tokens WHERE teacher_id=?', id);
+    const link = studentAuthLink(id);
+    if (link && hasTable('student_auth_session')) run('DELETE FROM student_auth_session WHERE userId=?', link.auth_user_id);
+    if (hasTable('student_auth_intents')) run('DELETE FROM student_auth_intents WHERE student_id=?', id);
+    if (hasTable('student_recovery_codes')) run('DELETE FROM student_recovery_codes WHERE student_id=? OR teacher_id=?', id, id);
+  }
+  function removeStudentAuth(id) {
+    const link = studentAuthLink(id);
+    revokeUserSessions(id);
+    if (!link) return;
+    const authUser = hasTable('student_auth_user') ? one('SELECT email,phoneNumber FROM student_auth_user WHERE id=?', link.auth_user_id) : null;
+    if (hasTable('student_auth_verification')) {
+      for (const identifier of [authUser?.email, authUser?.phoneNumber, authUser?.phoneNumber && authUser.phoneNumber + '-request-password-reset'].filter(Boolean)) {
+        run('DELETE FROM student_auth_verification WHERE identifier=?', identifier);
+      }
+      run("DELETE FROM student_auth_verification WHERE identifier LIKE 'reset-password:%' AND value=?", link.auth_user_id);
+    }
+    if (hasTable('student_auth_account')) run('DELETE FROM student_auth_account WHERE userId=?', link.auth_user_id);
+    run('DELETE FROM student_auth_links WHERE student_id=?', id);
+    if (hasTable('student_auth_user')) run('DELETE FROM student_auth_user WHERE id=?', link.auth_user_id);
+  }
   function noLive(classIds) { if (classIds.some(id => performance.read(id).playing)) throw fail(409, '课堂正在演奏，请先在教师端停止后管理关联数据。'); }
   function removeClass(id) {
     for (const table of ['classroom_rhythm_tracks', 'student_rhythm_requests', 'student_rhythm_receipts', 'classroom_places', 'image_jobs', 'submissions', 'members', 'classroom_arrangements']) run(`DELETE FROM ${table} WHERE class_id=?`, id);
@@ -135,9 +163,32 @@ export function createAdmin({ db, dbPath, secureCookies, body, layout, performan
     }
     const { admin, token } = session(req);
     if (!admin) throw fail(401, '请先使用管理员账号登录后台。');
+    const editorAssets = {
+      '/page-editor.js': ['../public/admin-page-editor.js', 'text/javascript; charset=utf-8'],
+      '/ui-design-schema.js': ['./ui-design-schema.js', 'text/javascript; charset=utf-8'],
+      '/page-editor.css': ['../public/admin-page-editor.css', 'text/css; charset=utf-8'],
+    };
+    const previewRoute = path === '/preview' || path.startsWith('/preview/');
+    if (path === '/ui-design' || path === '/editor-config' || previewRoute || Object.hasOwn(editorAssets, path)) {
+      if (req.headers.origin !== undefined) source(req);
+      if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '请从后台页面发起操作。');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    }
+    if (previewRoute) { preview.serve(req, res); return true; }
+    if (path === '/editor-config') {
+      if (req.method !== 'GET') throw fail(405, '页面编辑配置只支持读取。');
+      send(200, preview.config()); return true;
+    }
     if (path.startsWith('/database/')) { await database.proxy(req, res); return true; }
     if (req.method === 'GET') {
       if (path === '/me') { send(200, { admin }); return true; }
+      if (path === '/ui-design') { send(200, uiDesign.read()); return true; }
+      if (Object.hasOwn(editorAssets, path)) {
+        const [file, type] = editorAssets[path];
+        const content = readFileSync(new URL(file, import.meta.url));
+        res.writeHead(200, { 'Content-Type': type });
+        res.end(content); return true;
+      }
       if (path === '/overview') {
         const count = (table, clause = '') => one(`SELECT COUNT(*) AS n FROM ${table}${clause}`).n;
         send(200, { counts: { teachers: count('users', " WHERE role='teacher'"), students: count('users', " WHERE role='student'"), classrooms: count('classrooms'), submissions: count('submissions'), imageJobs: count('image_jobs') }, tables: Object.entries(tables).map(([name, label]) => ({ name, label, count: count(name) })) }); return true;
@@ -165,6 +216,15 @@ export function createAdmin({ db, dbPath, secureCookies, body, layout, performan
       throw fail(404, '没有找到这个管理操作。');
     }
     const data = await body(req);
+    if (path === '/ui-design') {
+      const published = uiDesign.publish(data, revision => {
+        // Reading the request body yields; do not let a revoked or expired
+        // administrator session publish after that pause.
+        if (!session(req).admin) throw fail(401, '请先使用管理员账号登录后台。');
+        audit(admin, 'ui-design.publish', String(revision));
+      });
+      send(200, published); return true;
+    }
     if (path === '/logout') { fields(data, []); atomic(() => { run('DELETE FROM admin_sessions WHERE token=?', token); audit(admin, 'admin.logout'); }); res.setHeader('Set-Cookie', cookie('', 0)); send(200, { ok: true }); return true; }
     if (path === '/users/create') {
       fields(data, ['username', 'password', 'name', 'role']);
@@ -179,10 +239,21 @@ export function createAdmin({ db, dbPath, secureCookies, body, layout, performan
     existing(table, id);
     if (entity === 'users' && action === 'password') {
       fields(data, ['password']); if (!passwordOK(data.password)) throw fail(400, '新密码需为 8–128 位字符。');
-      const salt = randomBytes(16).toString('hex'), password = (await hashPassword(data.password, salt, 64)).toString('hex');
-      atomic(() => { existing(table, id); run('UPDATE users SET salt=?,password=? WHERE id=?', salt, password, id); run('DELETE FROM sessions WHERE user_id=?', id); run('DELETE FROM image_mcp_tokens WHERE teacher_id=?', id); audit(admin, 'users.password', id); });
+      const salt = randomBytes(16).toString('hex');
+      const [passwordBytes, studentPassword] = await Promise.all([hashPassword(data.password, salt, 64), hashStudentPassword(data.password)]);
+      atomic(() => {
+        existing(table, id);
+        const link = studentAuthLink(id);
+        if (link) {
+          const credential = hasTable('student_auth_account') && one("SELECT id FROM student_auth_account WHERE userId=? AND providerId='credential'", link.auth_user_id);
+          if (!credential) throw fail(409, '这个学生使用手机号或平台登录，尚未设置密码。请使用撤销登录操作。');
+          run("UPDATE student_auth_account SET password=?,updatedAt=? WHERE userId=? AND providerId='credential'", studentPassword, Date.now(), link.auth_user_id);
+        }
+        run('UPDATE users SET salt=?,password=? WHERE id=?', salt, passwordBytes.toString('hex'), id);
+        revokeUserSessions(id); audit(admin, 'users.password', id);
+      });
     } else if (entity === 'users' && action === 'revoke') {
-      fields(data, []); atomic(() => { run('DELETE FROM sessions WHERE user_id=?', id); run('DELETE FROM image_mcp_tokens WHERE teacher_id=?', id); audit(admin, 'users.revoke', id); });
+      fields(data, []); atomic(() => { revokeUserSessions(id); audit(admin, 'users.revoke', id); });
     } else if (['users', 'classrooms', 'submissions'].includes(entity) && action === 'update') {
       fields(data, ['name']); if (!clean(data.name, entity === 'classrooms' ? 50 : entity === 'submissions' ? 40 : 30)) throw fail(400, '名称不能为空或超过长度限制。');
       atomic(() => { run(`UPDATE ${table} SET name=? WHERE id=?`, data.name.trim(), id); audit(admin, entity + '.update', id); });
@@ -200,7 +271,7 @@ export function createAdmin({ db, dbPath, secureCookies, body, layout, performan
           noLive([...owned, ...joined]); owned.forEach(removeClass);
           for (const child of ['classroom_rhythm_tracks', 'student_rhythm_requests', 'student_rhythm_receipts', 'submissions', 'image_jobs', 'members', 'student_profiles']) run(`DELETE FROM ${child} WHERE student_id=?`, id);
           run('DELETE FROM image_conversations WHERE student_id=? OR teacher_id=?', id, id);
-          run('DELETE FROM image_mcp_tokens WHERE teacher_id=?', id); run('DELETE FROM sessions WHERE user_id=?', id); run('DELETE FROM users WHERE id=?', id);
+          removeStudentAuth(id); run('DELETE FROM users WHERE id=?', id);
         }
         audit(admin, entity + '.delete', id);
       });

@@ -61,6 +61,98 @@ const participant = (page, id) => page.locator(`[data-performance-member="${id}"
 const toggle = (page, id) => page.locator(`[data-perform-toggle="${id}"]`);
 async function tempo(page, bpm) { await page.locator('#performance-bpm').fill(String(bpm)); await page.locator('#performance-bpm').press('Tab'); }
 
+async function expectSwingGrid(page, longShare) {
+  const geometry = await page.locator('.rhythm-grid').evaluate(grid => {
+    const rect = element => { const { x, width } = element.getBoundingClientRect(); return { x, width }; };
+    return {
+      labels: [...grid.querySelectorAll('.rhythm-step-numbers > span')].map(rect),
+      beats: [...grid.querySelectorAll('.rhythm-beats > span')].map(rect),
+      rows: [...grid.querySelectorAll('.rhythm-steps')].map(row => ({ ...rect(row), cells: [...row.children].map(rect) })),
+    };
+  });
+  for (const row of geometry.rows) {
+    for (const [index, cell] of row.cells.entries()) {
+      const share = index % 2 === 0 ? longShare : 1 - longShare;
+      expect(cell.width).toBeCloseTo(row.width / 8 * share, 1);
+      expect(geometry.labels[index].x).toBeCloseTo(cell.x, 1);
+      expect(geometry.labels[index].width).toBeCloseTo(cell.width, 1);
+      if (index % 4 === 0) {
+        expect(geometry.beats[index / 4].x).toBeCloseTo(cell.x, 1);
+        expect(geometry.beats[index / 4].width).toBeCloseTo(row.width / 4, 1);
+      }
+    }
+  }
+}
+
+test('Swing resizes rhythm cells, labels and held notes through editing, playback and bar changes', async ({ page, playwright }) => {
+  const fixture = await setup(page, playwright, ['小雨', '小林']);
+  const [first, second] = fixture.students;
+  try {
+    await saved(page, () => page.locator('#rhythm-bars').selectOption('2'));
+    await saved(page, () => drag(page, first.id, 0, 1));
+    await saved(page, () => drag(page, first.id, 2, 3));
+    await expectSwingGrid(page, 1 / 2);
+    const barWidth = await row(page, first.id).locator('.rhythm-steps').evaluate(el => el.getBoundingClientRect().width);
+    await page.locator('#performance-swing').fill('50');
+    await expectSwingGrid(page, 2 / 3);
+    const heldWidths = await row(page, first.id).locator('.rhythm-step').evaluateAll(cells =>
+      [0, 2].map(start => cells[start + 1].getBoundingClientRect().right - cells[start].getBoundingClientRect().left));
+    expect(heldWidths[0] / heldWidths[1]).toBeCloseTo(1, 2);
+    await saved(page, () => step(page, second.id, 3).click());
+    await expectSwingGrid(page, 2 / 3);
+    await page.locator('.rhythm-grid-scroll').screenshot({ path: 'test-results/swing-rhythm-grid.png' });
+    await page.locator('[data-rhythm-bar="1"]').click();
+    await expectSwingGrid(page, 2 / 3);
+    await saved(page, () => drag(page, second.id, 18, 19));
+    const snapshot = (await (await page.request.get(`/api/teacher/classrooms/${fixture.roomId}`)).json()).classroom;
+    expect(snapshot.arrangement.tracks.find(track => track.studentId === second.id).steps.slice(18, 20)).toEqual([2, false]);
+    await page.locator('[data-rhythm-bar="0"]').click();
+    await toggle(page, first.id).click(); await page.locator('#performance-play').click();
+    await expect(page.locator('.rhythm-step.is-playing')).toHaveCount(2);
+    await page.locator('#performance-swing').fill('25');
+    await expectSwingGrid(page, 7 / 12);
+    await page.locator('#performance-stop').click();
+    await expectSwingGrid(page, 7 / 12);
+    await expect(row(page, first.id).locator('.rhythm-steps')).toHaveJSProperty('offsetWidth', Math.round(barWidth));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectSwingGrid(page, 7 / 12);
+    await page.locator('#performance-swing').fill('0');
+    await expectSwingGrid(page, 1 / 2);
+  } finally { await fixture.dispose(); }
+});
+
+test('Swing buttons and slider alternate audible adjacent cells at a maximum 2:1 ratio', async ({ page, playwright }) => {
+  await page.addInitScript(() => {
+    window.__swingStarts = [];
+    const create = AudioContext.prototype.createBufferSource;
+    AudioContext.prototype.createBufferSource = function () {
+      const source = create.call(this), start = source.start.bind(source);
+      source.start = (...args) => { window.__swingStarts.push(args[0]); return start(...args); };
+      return source;
+    };
+  });
+  const fixture = await setup(page, playwright), student = fixture.students[0];
+  try {
+    const room = (await (await page.request.get(`/api/teacher/classrooms/${fixture.roomId}`)).json()).classroom;
+    await page.request.post(`/api/teacher/classrooms/${fixture.roomId}/arrangement`, { headers, data: { revision: room.arrangement.revision, track: { studentId: student.id, steps: Array(16).fill(true) } } });
+    await page.locator('#refresh-class').click();
+    await tempo(page, 120);
+    await page.locator('#performance-swing').fill('45');
+    await page.getByRole('button', { name: '增大 Swing', exact: true }).click();
+    await expect(page.locator('#swing-value')).toHaveText('50%');
+    await toggle(page, student.id).click(); await page.locator('#performance-play').click();
+    await expect.poll(() => page.evaluate(() => window.__swingStarts.length)).toBeGreaterThanOrEqual(5);
+    const starts = await page.evaluate(() => window.__swingStarts.slice(0, 5));
+    expect(starts.map(value => Math.round((value - starts[0]) * 1000))).toEqual([0, 167, 250, 417, 500]);
+    await page.locator('#performance-stop').click();
+    await page.getByRole('button', { name: '减小 Swing', exact: true }).click();
+    await expect(page.locator('#swing-value')).toHaveText('45%');
+    await page.locator('#performance-swing').fill('0');
+    await page.locator('#performance-swing').press('ArrowRight');
+    await expect(page.locator('#swing-value')).toHaveText('1%');
+  } finally { await fixture.dispose(); }
+});
+
 test('teacher Android background event stops playback and releases classroom control', async ({ page, playwright }) => {
   const fixture = await setup(page, playwright), student = fixture.students[0];
   try {

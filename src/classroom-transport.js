@@ -1,5 +1,5 @@
 // iOS runs the bundled student UI locally. Network access starts only when
-// the student explicitly enters a classroom; changing views never connects.
+// the student explicitly opens account actions or enters a classroom.
 export const isOfflineStudent = () => window.FreeImproClassroom?.offline === true;
 export const canUseClassroom = () => !isOfflineStudent() || window.FreeImproClassroom.connected === true;
 

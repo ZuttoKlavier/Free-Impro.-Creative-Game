@@ -15,15 +15,15 @@ test('registered student requests fixed identity; teacher binds the project conv
   const context = await browser.newContext(), student = await context.newPage();
   student.on('pageerror', e => errors.push(e.message));
   try {
-    await student.goto('/'); await student.locator('#classroom-tab').click();
+    await student.goto('/'); await student.locator('#classroom-tab').click(); await student.locator('#open-my-classroom').click();
     await student.locator('#auth-username').fill('同学'); await student.locator('#auth-password').fill(room.code); await student.locator('#auth-submit').click();
     await expect(student.locator('#register-student-profile')).toBeVisible();
     expect((await (await student.request.get('/api/student/image-status')).json()).registered).toBe(false);
     await student.locator('#register-student-profile').click(); await expect(student.locator('#create-student-avatar')).toBeEnabled();
     await student.locator('#create-student-avatar').click();
     await student.locator('#photo-file').setInputFiles({ name: 'synthetic-face.png', mimeType: 'image/png', buffer: photo });
-    await student.locator('#generate-character').click(); await expect(student.locator('#character-status')).toHaveText('图像生成中');
-    await student.locator('#classroom-tab').click(); await expect(student.locator('#student-profile-status')).toHaveText('图像生成中');
+    await student.locator('#generate-character').click(); await expect(student.locator('#character-status')).toHaveText('申请已提交，等待老师处理。');
+    await student.locator('#classroom-tab').click(); await expect(student.locator('#student-profile-status')).toHaveText('申请已提交，等待老师处理。');
     await page.goto('/teacher.html'); await page.locator('#image-settings').click();
     await expect(page.getByRole('link', { name: '打开 EV生图储存库', exact: true })).toHaveAttribute('href', projectUrl);
     await expect(page.locator('[data-generated-result]')).toHaveCount(0);
@@ -85,6 +85,7 @@ test('teacher automatically receives requests and tool status without discarding
     await page.getByRole('button', { name: '查看生成材料', exact: true }).click();
     const draftUrl = 'https://chatgpt.com/c/' + crypto.randomUUID();
     await page.getByLabel('学生专属对话地址').fill(draftUrl); await page.locator('[data-project-confirm]').check();
+    await page.bringToFront();
     await page.waitForResponse(r => r.url().endsWith('/api/teacher/image-jobs') && r.request().method() === 'GET', { timeout: 8000 });
     await expect(page.getByLabel('学生专属对话地址')).toHaveValue(draftUrl); await expect(page.locator('[data-project-confirm]')).toBeChecked();
     await page.getByText('MCP 连接设置', { exact: true }).click(); await page.locator('#issue-image-token').click();

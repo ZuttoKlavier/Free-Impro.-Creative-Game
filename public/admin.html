@@ -35,6 +35,7 @@
         <button data-nav="classrooms"><span class="nav-icon" aria-hidden="true">▦</span>课堂管理</button>
         <button data-nav="submissions"><span class="nav-icon" aria-hidden="true">♫</span>作品提交</button>
         <button data-nav="images"><span class="nav-icon" aria-hidden="true">▧</span>图片申请</button>
+        <button data-nav="page-editor"><span class="nav-icon" aria-hidden="true">✎</span>页面编辑</button>
         <button data-nav="logs"><span class="nav-icon" aria-hidden="true">≡</span>操作日志</button>
         <button data-nav="tables"><span class="nav-icon" aria-hidden="true">▤</span>全部数据表</button>
         <button data-nav="database"><span class="nav-icon" aria-hidden="true">▥</span>数据库浏览</button>
@@ -59,20 +60,24 @@
         <div class="card table-card"><div class="table-description" id="table-description"></div><div class="table-scroll"><table id="records-table"><thead id="records-head"></thead><tbody id="records-body"></tbody></table></div><div id="records-empty" class="table-placeholder" hidden></div><div class="pagination"><span id="records-count"></span><div class="pagination-controls"><button id="previous-page" type="button">上一页</button><span id="page-number"></span><button id="next-page" type="button">下一页</button></div></div></div>
       </section>
       <section id="database-panel" hidden><div class="database-toolbar"><p class="muted small">完整数据表只读浏览。账号与业务修改请使用对应管理页面。</p><a href="/api/admin/database/" target="_blank" rel="noopener">在新窗口打开数据库浏览</a></div><iframe id="database-frame" class="database-frame" title="只读数据库浏览" hidden></iframe></section>
+      <section id="page-editor-panel" hidden aria-labelledby="page-title"><p class="loading" id="page-editor-loading">正在载入页面编辑器…</p><div id="page-editor-root"></div></section>
     </main>
   </div>
   <dialog id="action-dialog" aria-labelledby="dialog-title"><form id="action-form"><div class="dialog-head"><h2 id="dialog-title"></h2><button id="dialog-close" type="button" aria-label="关闭对话框">×</button></div><p id="dialog-description" class="dialog-description"></p><p id="dialog-error" class="message" role="alert" hidden></p><div id="dialog-fields"></div><div class="dialog-actions"><button id="dialog-cancel" type="button">取消</button><button id="dialog-confirm" class="primary" type="submit">保存</button></div></form></dialog>
   <script type="module">
     const $ = id => document.getElementById(id);
     const state = { admin: null, overview: null, nav: 'overview', table: 'users', role: '', page: 1, total: 0, pageSize: 25, request: 0, dialog: null };
-    const views = { overview: ['数据概览','查看当前服务器的数据与课堂进度。'], teachers: ['教师管理','管理所有教师账号及其课堂关联数据。'], students: ['学生管理','管理服务器中的学生账号与关联记录。'], classrooms: ['课堂管理','查看所有教师的课堂与成员关系。'], submissions: ['作品提交','管理已提交到服务器的作品；手机离线作品保存在设备上。'], images: ['图片申请','查看图片申请状态、参考图与生成结果。'], logs: ['操作日志','查看后台管理员的操作记录。'], tables: ['全部数据表','浏览服务器中的全部数据表，敏感凭证不会显示。'], database: ['数据库浏览','以只读方式浏览完整数据表。'] };
+    let pageEditor = null;
+    let pageEditorModule = null;
+    let pageEditorSession = 0;
+    const views = { overview: ['数据概览','查看当前服务器的数据与课堂进度。'], teachers: ['教师管理','管理所有教师账号及其课堂关联数据。'], students: ['学生管理','管理服务器中的学生账号与关联记录。'], classrooms: ['课堂管理','查看所有教师的课堂与成员关系。'], submissions: ['作品提交','管理已提交到服务器的作品；手机离线作品保存在设备上。'], images: ['图片申请','查看图片申请状态、参考图与生成结果。'], logs: ['操作日志','查看后台管理员的操作记录。'], tables: ['全部数据表','浏览服务器中的全部数据表，敏感凭证不会显示。'], database: ['数据库浏览','以只读方式浏览完整数据表。'], 'page-editor': ['页面编辑','管理员专用：直接预览并调整学生端与教师端的外观。'] };
     function element(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (className) node.className = className; return node; }
     function message(id, text, success = false) { const node = $(id); node.textContent = text || ''; node.hidden = !text; node.classList.toggle('success', success); }
-    function showLogin(text = '') { state.admin = null; state.overview = null; state.request++; $('admin-shell').hidden = true; $('login-screen').hidden = false; $('login-password').value = ''; $('records-head').replaceChildren(); $('records-body').replaceChildren(); $('table-links').replaceChildren(); $('counts').replaceChildren(); $('account-name').textContent = ''; $('database-frame').removeAttribute('src'); $('database-frame').hidden = true; closeDialog(); message('login-error', text); }
+    function showLogin(text = '') { pageEditorSession++; pageEditor?.destroy(); pageEditor = null; $('page-editor-root').replaceChildren(); $('page-editor-panel').hidden = true; state.admin = null; state.overview = null; state.request++; $('admin-shell').hidden = true; $('login-screen').hidden = false; $('login-password').value = ''; $('records-head').replaceChildren(); $('records-body').replaceChildren(); $('table-links').replaceChildren(); $('counts').replaceChildren(); $('account-name').textContent = ''; $('database-frame').removeAttribute('src'); $('database-frame').hidden = true; closeDialog(); message('login-error', text); }
     async function api(path, data) {
       let response; try { response = await fetch('/api/admin' + path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) }); } catch { throw new Error('暂时无法连接后台，请检查服务后重试。'); }
       let result; try { result = await response.json(); } catch { throw new Error('后台返回了无效响应，请稍后重试。'); }
-      if (!response.ok) { if (response.status === 401 && state.admin) showLogin('登录已失效，请重新登录。'); throw new Error(result.message || result.error || '操作未完成，请重试。'); }
+      if (!response.ok) { if (response.status === 401 && state.admin) showLogin('登录已失效，请重新登录。'); throw Object.assign(new Error(result.message || result.error || '操作未完成，请重试。'), { status: response.status }); }
       return result;
     }
     async function authenticated(admin) { state.admin = admin; state.nav = 'overview'; $('login-screen').hidden = true; $('admin-shell').hidden = false; $('account-name').textContent = admin.name || admin.username; message('login-error', ''); await loadOverview(); await navigate('overview'); }
@@ -85,10 +90,35 @@
       $('table-links').replaceChildren(); for (const table of overview.tables || []) { const button = element('button', undefined, 'table-link'); button.type='button'; button.append(element('span', table.label || table.name), element('span', Number(table.count || 0).toLocaleString('zh-CN') + ' 条', 'muted')); button.addEventListener('click',() => navigate('tables',table.name).catch(errorMessage)); $('table-links').append(button); }
     }
     function tableLabel(name) { return state.overview?.tables?.find(table => table.name === name)?.label || name; }
+    async function openPageEditor() {
+      const session = pageEditorSession;
+      const admin = state.admin;
+      if (!admin || state.nav !== 'page-editor') return;
+      $('page-editor-loading').hidden = !!pageEditor;
+      if (!pageEditor) {
+        // These assets are served only after the administrator session is verified.
+        pageEditorModule ||= import('/api/admin/page-editor.js').catch(error => { pageEditorModule = null; throw error; });
+        let module;
+        try { module = await pageEditorModule; }
+        catch (error) {
+          if (session !== pageEditorSession || state.admin !== admin || state.nav !== 'page-editor') return;
+          await api('/me');
+          throw new Error('页面编辑器载入失败，请检查服务后重试。');
+        }
+        if (session !== pageEditorSession || state.admin !== admin || state.nav !== 'page-editor') return;
+        if (!document.getElementById('page-editor-styles')) { const style = document.createElement('link'); style.id = 'page-editor-styles'; style.rel = 'stylesheet'; style.href = '/api/admin/page-editor.css'; document.head.append(style); }
+        pageEditor ||= module.createPageEditor({ root: $('page-editor-root'), api, onUnauthorized: () => showLogin('登录已失效，请重新登录。') });
+      }
+      $('page-editor-loading').hidden = true;
+      await pageEditor.activate();
+    }
     async function navigate(nav, explicitTable) {
-      if (!state.admin) return; state.request++; state.nav = nav; message('content-message',''); closeDialog(); for (const button of document.querySelectorAll('[data-nav]')) { if (button.dataset.nav === nav) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
-      const view = views[nav] || views.tables; $('page-title').textContent = view[0]; $('breadcrumb-current').textContent = view[0]; $('page-subtitle').textContent = view[1]; $('overview-panel').hidden = nav !== 'overview'; $('records-panel').hidden = ['overview','database'].includes(nav); $('database-panel').hidden = nav !== 'database'; $('refresh').hidden = nav === 'database';
+      if (!state.admin) return;
+      if (state.nav === 'page-editor' && nav !== 'page-editor') pageEditor?.suspend();
+      state.request++; state.nav = nav; message('content-message',''); closeDialog(); for (const button of document.querySelectorAll('[data-nav]')) { if (button.dataset.nav === nav) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); }
+      const view = views[nav] || views.tables; $('page-title').textContent = view[0]; $('breadcrumb-current').textContent = view[0]; $('page-subtitle').textContent = view[1]; $('overview-panel').hidden = nav !== 'overview'; $('records-panel').hidden = ['overview','database','page-editor'].includes(nav); $('database-panel').hidden = nav !== 'database'; $('page-editor-panel').hidden = nav !== 'page-editor'; $('refresh').hidden = ['database','page-editor'].includes(nav);
       if (nav === 'overview') return;
+      if (nav === 'page-editor') { await openPageEditor(); return; }
       if (nav === 'database') { if (!$('database-frame').hasAttribute('src')) $('database-frame').src = '/api/admin/database/'; $('database-frame').hidden = false; return; }
       const logTable = state.overview?.tables?.find(table => /admin.*(?:audit|log)|audit.*log/.test(table.name))?.name || 'admin_audit_log';
       state.table = explicitTable || ({ teachers:'users', students:'users', classrooms:'classrooms', submissions:'submissions', images:'image_jobs', logs:logTable }[nav]) || state.overview?.tables?.[0]?.name || 'users'; state.role = nav === 'teachers' ? 'teacher' : nav === 'students' ? 'student' : ''; state.page = 1; $('search').value = ''; $('table-select').value = state.table; $('role-select').value = state.role; await loadRecords();
@@ -138,7 +168,7 @@
     });
     $('action-dialog').addEventListener('cancel',event => { if ($('dialog-confirm').disabled) event.preventDefault(); else closeDialog(); }); $('dialog-cancel').addEventListener('click',closeDialog); $('dialog-close').addEventListener('click',closeDialog);
     $('login-form').addEventListener('submit',async event => { event.preventDefault(); $('login-submit').disabled=true; message('login-error',''); try { const result=await api('/login',{username:$('login-username').value.trim(),password:$('login-password').value}); $('login-password').value=''; await authenticated(result.admin); } catch (error) { errorMessage(error); } finally { $('login-submit').disabled=false; } });
-    $('logout').addEventListener('click',async () => { $('logout').disabled=true; try { await api('/logout',{}); showLogin(); } catch (error) { errorMessage(error); } finally { $('logout').disabled=false; } });
+    $('logout').addEventListener('click',async () => { if (pageEditor?.isSaving()) { message('content-message','页面外观正在保存，请保存完成后再退出。'); return; } if (pageEditor?.hasUnsavedChanges() && !window.confirm('页面编辑仍有未保存修改，退出登录会放弃这些修改。确定退出吗？')) return; $('logout').disabled=true; try { await api('/logout',{}); showLogin(); } catch (error) { errorMessage(error); } finally { $('logout').disabled=false; } });
     for (const button of document.querySelectorAll('[data-nav]')) button.addEventListener('click',() => navigate(button.dataset.nav).catch(errorMessage));
     $('overview-database').addEventListener('click',() => navigate('database').catch(errorMessage));
     $('table-select').addEventListener('change',async () => { state.table=$('table-select').value; state.role=''; $('role-select').value=''; state.page=1; $('search').value=''; await loadRecords(); });
@@ -146,7 +176,7 @@
     $('search-form').addEventListener('submit',async event => { event.preventDefault(); state.page=1; await loadRecords(); }); $('create-user').addEventListener('click',() => openDialog('user-create'));
     $('export-records').addEventListener('click',async () => { $('export-records').disabled=true; message('content-message',''); const table=state.table; const query=new URLSearchParams({table,q:$('search').value.trim()}); if(table==='users' && state.role) query.set('role',state.role); try { const result=await api('/export?'+query); if(!state.admin) return; const blob=new Blob([JSON.stringify(result,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const link=element('a'); link.href=url; link.download=table+'.json'; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); message('content-message','已导出全部匹配记录。图片和音频以元数据显示。',true); } catch(error) { errorMessage(error); } finally { $('export-records').disabled=false; } });
     $('previous-page').addEventListener('click',async () => { if (state.page>1) { state.page--; await loadRecords(); } }); $('next-page').addEventListener('click',async () => { state.page++; await loadRecords(); });
-    $('refresh').addEventListener('click',async () => { $('refresh').disabled=true; message('content-message',''); try { await loadOverview(); if (state.nav!=='overview' && state.nav!=='database') await loadRecords(); } catch (error) { errorMessage(error); } finally { $('refresh').disabled=false; } });
+    $('refresh').addEventListener('click',async () => { $('refresh').disabled=true; message('content-message',''); try { await loadOverview(); if (!['overview','database','page-editor'].includes(state.nav)) await loadRecords(); } catch (error) { errorMessage(error); } finally { $('refresh').disabled=false; } });
     api('/me').then(result => authenticated(result.admin)).catch(error => { if (state.admin) errorMessage(error); });
   </script>
 </body>

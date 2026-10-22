@@ -1,0 +1,31 @@
+.student-account { max-width: 760px; margin: 20px auto; }
+.student-account-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.student-account-heading h2 { margin: 0; }
+.student-account-heading p { margin: 8px 0 0; }
+.student-account-heading > button { flex-shrink: 0; }
+.student-account #student-account-content { padding-top: 12px; }
+.student-account p { overflow-wrap: anywhere; }
+.student-account form { display: grid; gap: 14px; max-width: 480px; margin-top: 16px; }
+.student-account label { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.student-account label input { width: 100%; }
+.student-account form > button { justify-self: start; }
+.student-account-modes { display: flex; flex-wrap: wrap; gap: 8px; }
+.student-account-modes .active { border-color: var(--green); color: var(--green); background: #eef4ee; }
+.student-account-other { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.student-account-other h3 { margin: 0 0 14px; font-size: 14px; }
+.student-account-providers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.student-account-providers button { width: 100%; }
+.student-account-providers p { font-size: 11px; line-height: 1.7; margin: 8px 0 0; }
+.student-account-code { display: flex; align-items: end; gap: 10px; }
+.student-account-code label { flex: 1; min-width: 0; }
+.student-account-code button { flex-shrink: 0; }
+#student-account-refresh { margin-top: 12px; }
+@media (max-width: 600px) {
+  .student-account { padding: 20px; }
+  .student-account-heading { align-items: flex-start; }
+  .student-account-heading h2 { font-size: 20px; }
+  .student-account-heading p { font-size: 11px; line-height: 1.7; }
+  .student-account-providers { grid-template-columns: 1fr; }
+  .student-account-providers > div { display: grid; grid-template-columns: 130px minmax(0, 1fr); align-items: start; gap: 12px; }
+  .student-account-providers p { margin-top: 0; }
+}

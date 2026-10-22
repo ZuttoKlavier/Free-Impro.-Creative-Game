@@ -1,5 +1,7 @@
 import { apiBase } from './client-role.js';
 import { Sequencer } from './sequencer.js';
+import { fitRhythm } from './rhythm-data.js';
+import { stepDuration } from './rhythm-timing.js';
 import './teacher-performance.css';
 
 export function performanceMarkup(room, escape, waiting = '') {
@@ -17,7 +19,7 @@ export function performanceMarkup(room, escape, waiting = '') {
       </div>
       <div class="mix-summary"><strong id="mix-count">0</strong><span id="mix-label">个已选声部</span><small id="mix-waiting">同一起点 · 一起循环</small></div>
     </div></div><div class="performance-waiting">${waiting}</div></div>
-    <div class="performance-controls"><div class="transport"><button id="performance-play" class="primary">▶ 播放</button><button id="performance-stop" class="secondary">■ 停止</button></div><div class="tempo-control"><label for="performance-bpm">速度 BPM</label><div><button id="bpm-minus" aria-label="降低速度">−</button><input id="performance-bpm" type="number" min="40" max="240" value="100"><button id="bpm-plus" aria-label="提高速度">＋</button></div><input id="performance-tempo" aria-label="速度滑块" type="range" min="40" max="240" value="100"></div><label class="performance-slider">Swing <output id="swing-value">0%</output><input id="performance-swing" type="range" min="0" max="50" value="0"></label><label class="performance-slider">总音量 <output id="volume-value">80%</output><input id="performance-volume" type="range" min="0" max="100" value="80"></label></div>
+    <div class="performance-controls"><div class="transport"><button id="performance-play" class="primary">▶ 播放</button><button id="performance-stop" class="secondary">■ 停止</button></div><div class="tempo-control"><label for="performance-bpm">速度 BPM</label><div><button id="bpm-minus" aria-label="降低速度">−</button><input id="performance-bpm" type="number" min="40" max="240" value="100"><button id="bpm-plus" aria-label="提高速度">＋</button></div><input id="performance-tempo" aria-label="速度滑块" type="range" min="40" max="240" value="100"></div><div class="performance-slider swing-control"><label for="performance-swing">Swing</label><output id="swing-value">0%</output><div class="swing-stepper"><button id="swing-minus" aria-label="减小 Swing">−</button><input id="performance-swing" aria-label="Swing 摇摆程度" type="range" min="0" max="50" value="0"><button id="swing-plus" aria-label="增大 Swing">＋</button></div></div><label class="performance-slider">总音量 <output id="volume-value">80%</output><input id="performance-volume" type="range" min="0" max="100" value="80"></label></div>
     <p id="performance-message" role="status" class="muted"></p><p id="performance-network" role="status" class="inline-error"></p>
     <div class="performance-layer-heading"><div><strong>声音叠加</strong><span>每个伙伴一层声音 · 发声时亮起</span></div><div><button id="performance-add-all" class="secondary">全部加入</button><button id="performance-remove-all" class="secondary">全部退出</button></div></div>
     <div class="performance-roster" aria-label="选择参与演奏的学生"></div>
@@ -76,7 +78,13 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
       const replacement = accepted(id) || current(id), before = stateTrack(id);
       if (replacement && replacement.id !== before.submissionId && replacement.id !== before.pendingSubmissionId) {
         const sound = await buffer(replacement); if (disposed) return;
-        if ((accepted(id) || current(id))?.id === replacement.id) engine.replaceTrack(id, { submissionId: replacement.id, buffer: sound });
+        if ((accepted(id) || current(id))?.id === replacement.id) {
+          engine.replaceTrack(id, { submissionId: replacement.id, buffer: sound });
+          if (replacement.rhythm) {
+            const steps = fitRhythm(replacement.rhythm, room.arrangement?.bars || 1);
+            engine.setPattern(id, steps); appliedPatterns.set(id, JSON.stringify(steps));
+          }
+        }
       }
     })();
     loading.set(id, task); paint();
@@ -172,7 +180,7 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
       }
       if (owned || engine.getState().playing) {
         const latest = engine.getState();
-        const result = await api(`/classrooms/${room.id}/performance`, { clientId, playing: latest.playing, activeStudentIds: latest.playing ? latest.tracks.filter(t => t.active).map(t => t.id) : [] });
+        const result = await api(`/classrooms/${room.id}/performance`, { clientId, playing: latest.playing, activeStudentIds: latest.playing ? latest.tracks.filter(t => t.active).map(t => t.id) : [], ...(latest.playing ? { timeline: { bpm: latest.bpm, swing: latest.swing, volume: latest.volume, bars: latest.bars, loop: latest.loop, remaining: latest.remaining, tracks: latest.tracks.filter(t => t.active).map(t => ({ id: t.id, submissionId: t.submissionId, pattern: t.pattern, volume: t.volume, position: t.position })) } } : {}) });
         if (!disposed) { receive({ ...room, performance: result.classroom.performance }); if ($('#performance-network')) $('#performance-network').textContent = ''; }
       }
     } catch (error) {
@@ -225,6 +233,9 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
   function paint() {
     if (!bound?.isConnected || disposed) return;
     const state = engine.getState();
+    // Use the audio durations as column weights for both cells and their labels.
+    root.querySelector('.rhythm-editor')?.style.setProperty('--rhythm-step-columns',
+      Array.from({ length: 16 }, (_, step) => `minmax(0, ${stepDuration(step, 60, state.swing)}fr)`).join(' '));
     const waitingSignature = JSON.stringify([room.members, room.submissions]);
     if (waitingMarkup && waitingSignature !== waitingRendered) {
       const focused = document.activeElement?.dataset?.waitingToggle;
@@ -332,7 +343,10 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
     $('#performance-bpm').onchange = event => { engine.setBpm(event.target.value); event.target.value = engine.getState().bpm; };
     $('#bpm-minus').onclick = () => engine.setBpm(engine.getState().bpm - 1);
     $('#bpm-plus').onclick = () => engine.setBpm(engine.getState().bpm + 1);
-    $('#performance-swing').oninput = event => engine.setSwing(event.target.value / 100);
+    const changeSwing = event => engine.setSwing(event.target.value / 100);
+    $('#performance-swing').oninput = changeSwing; $('#performance-swing').onchange = changeSwing;
+    $('#swing-minus').onclick = () => engine.setSwing(Math.round(engine.getState().swing * 100 - 5) / 100);
+    $('#swing-plus').onclick = () => engine.setSwing(Math.round(engine.getState().swing * 100 + 5) / 100);
     $('#performance-volume').oninput = event => engine.setVolume(event.target.value / 100);
     $('.performance-roster').onclick = async event => {
       const button = event.target.closest('[data-perform-toggle]'); if (button) { toggle(button.dataset.performToggle); return; }
@@ -394,7 +408,7 @@ export function createTeacherPerformance({ root, room: initialRoom, api, escape,
   };
   window.addEventListener('pagehide', pageHide);
   window.addEventListener('freeimpro-teacher-background', pageHide);
-  const heartbeat = setInterval(() => { if (engine.getState().playing || room.submissions.some(s => s.status === 'accepted')) queuePublish(); }, 5000);
+  const heartbeat = setInterval(() => { if (engine.getState().playing || room.submissions.some(s => s.status === 'accepted')) queuePublish(); }, 1000);
   sync(room);
   return {
     roomId: room.id, clientId, sync, attach, stop,

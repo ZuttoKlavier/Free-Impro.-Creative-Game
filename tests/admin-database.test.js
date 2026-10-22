@@ -39,6 +39,13 @@ test('actual sqlite-web reads temporary data and masks credentials across query 
     INSERT INTO image_mcp_activity VALUES ('fixture-activity-private');
     INSERT INTO admin_accounts VALUES ('fixture-admin', 'fixture-admin-password-private', 'fixture-admin-salt-private');
     INSERT INTO admin_sessions VALUES ('fixture-admin-session-private');`);
+  db.exec(`CREATE TABLE student_recovery_codes (digest TEXT PRIMARY KEY, issuer_session TEXT, student_id TEXT);
+    INSERT INTO student_recovery_codes VALUES ('fixture-recovery-private', 'fixture-issuer-private', 'fixture');`);
+  const authTables = ['student_auth_user', 'student_auth_session', 'student_auth_account', 'student_auth_verification', 'student_auth_links', 'student_auth_settings', 'student_auth_intents', 'student_auth_future_credentials'];
+  for (const table of authTables) {
+    db.exec(`CREATE TABLE ${table} (id TEXT PRIMARY KEY, private_value TEXT)`);
+    db.prepare(`INSERT INTO ${table} VALUES (?,?)`).run('fixture', 'fixture-auth-private');
+  }
   writeFileSync(secretPath, 'fixture-file-private');
   const browser = createAdminDatabase({ dbPath: relative(process.cwd(), dbPath) });
   const server = http.createServer((req, res) => { browser.proxy(req, res); });
@@ -74,6 +81,21 @@ test('actual sqlite-web reads temporary data and masks credentials across query 
   assert.match(csv.headers.get('content-type'), /csv/);
   assert.match(csv.body, /Admin test teacher/);
   assert.doesNotMatch(csv.body, /fixture-(password|salt)-private/);
+  const recovery = await query('SELECT digest,issuer_session,student_id FROM student_recovery_codes');
+  assert.equal(recovery.status, 200);
+  assert.doesNotMatch(recovery.body, /fixture-(recovery|issuer)-private/);
+  for (const table of authTables) {
+    const result = await query(`SELECT * FROM "${table.toUpperCase()}"`);
+    assert.equal(result.status, 200);
+    assert.match(result.body, /not authorized|authorization denied|prohibited/i);
+    assert.doesNotMatch(result.body, /fixture-auth-private/);
+    assert.equal((await request(`/${table}/content/`)).status, 403);
+    assert.equal((await request(`/${table}/export/`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ export_format: 'csv' }) })).status, 403);
+  }
+  const joinedAuth = await query('WITH private AS (SELECT private_value FROM student_auth_settings) SELECT users.display_name,private.private_value FROM users CROSS JOIN private');
+  assert.equal(joinedAuth.status, 200);
+  assert.match(joinedAuth.body, /not authorized|authorization denied|prohibited/i);
+  assert.doesNotMatch(joinedAuth.body, /fixture-auth-private/);
   for (const sql of [
     "UPDATE users SET display_name='Hacked'",
     'PRAGMA user_version=77',

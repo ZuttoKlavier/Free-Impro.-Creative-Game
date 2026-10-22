@@ -15,4 +15,12 @@ public class TeacherUrlPolicyTest {
     @Test public void invalidAddressesCannotBeSaved() {
         for (String url : new String[]{"http://host/", "https://user@host/", "https://host/elsewhere", "https://host/?a=b"}) assertThrows(IllegalArgumentException.class, () -> new TeacherUrlPolicy(url));
     }
+    @Test public void publicClassroomKeepsTeacherOriginBoundary() {
+        TeacherUrlPolicy publicPolicy = new TeacherUrlPolicy("https://class.empfreeimpro.xyz/");
+        assertEquals("https://class.empfreeimpro.xyz/teacher.html", publicPolicy.page());
+        assertTrue(publicPolicy.navigation(publicPolicy.page()));
+        assertTrue(publicPolicy.resource("https://class.empfreeimpro.xyz/api/teacher/me"));
+        assertTrue(publicPolicy.resource("https://class.empfreeimpro.xyz/assets/teacher.js"));
+        for (String url : new String[]{"http://class.empfreeimpro.xyz/teacher.html", "https://class.empfreeimpro.xyz:8443/teacher.html", "https://other.empfreeimpro.xyz/teacher.html", "https://class.empfreeimpro.xyz.evil.test/teacher.html", "https://user@class.empfreeimpro.xyz/teacher.html", "https://class.empfreeimpro.xyz/api/student/me", "https://class.empfreeimpro.xyz/admin.html"}) assertFalse(url, publicPolicy.resource(url));
+    }
 }

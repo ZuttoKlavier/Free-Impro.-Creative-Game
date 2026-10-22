@@ -2,16 +2,21 @@ import { installPullRefresh } from './pull-refresh.js';
 import './style.css';
 import './student-shell.css';
 import { initOffline } from './offline.js';
+import { initUIDesign } from './ui-design.js';
 import { initClassroom } from './classroom.js';
 import { initCharacters } from './characters.js';
 import { initStudentImages } from './student-image-account.js';
+import { initStudentAuth } from './student-auth.js';
+import { encodeAvatarBackup, decodeAvatarBackup } from './student-avatar-data.js';
 import { imageFromDataURL } from './images.js';
-import { detectSlices, mono, trimSamples, encodeWav, demoAudio, MAX_RECORDING } from './audio.js';
-import { listSounds, saveSounds, importSounds, deleteSound, LIMIT } from './storage.js';
+import { detectSlices, mono, trimSamples, encodeWav, demoAudio, audioLevel, decodePcmWav, MAX_RECORDING } from './audio.js';
+import { prepareAudioSession, resumeAudioContext } from './audio-session.js';
+import { listSounds, saveSounds, importSounds, deleteSound, updateSound, LIMIT } from './storage.js';
 import { exportLocalFile, isStudentClient } from './student-client.js';
 import { createStudentRhythm } from './student-rhythm.js';
 import { validateRhythm } from './rhythm-data.js';
 import { createWaveform } from './waveform.js';
+import './tablet-layout.css';
 
 const icons = {
   mic: '<rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0014 0v-2M12 19v3m-4 0h8"/>',
@@ -38,17 +43,17 @@ document.querySelector('#app').innerHTML = `
       </section>
       <section class="panel edit-panel"><div class="panel-top"><span class="section-kicker">02 / 挑选与编辑</span><span class="pill teal">单个声音 ≤ 1 秒</span></div><h2>留下最喜欢的那一声</h2><p class="muted">自动切出声音片段，选择后还可以调整起止位置。</p>
         <div id="editor-empty" class="empty-editor"><div class="empty-wave">${icon('wave')}</div><h3>你的声音，即将出现在这里</h3><p>先录一段声音，或用示例探索一下。</p><span>录音 → 自动切片 → 试听 → 保存</span></div>
-        <div id="editor" hidden><div class="source-info"><span id="source-label"></span><button id="play-original" class="text-button">${icon('play')}整段试听</button></div><div id="waveform" aria-label="原始录音波形及选中范围" aria-describedby="waveform-help"></div><p id="waveform-help" class="waveform-help">在波形上拖动框选 · 拖动选区移动 · 拖动两端裁切（最长 1 秒）</p><div class="axis"><span>0s</span><span id="source-duration"></span></div>
+        <div id="editor" hidden><div class="source-editor"><div class="source-info"><span id="source-label"></span><button id="play-original" class="text-button">${icon('play')}整段试听</button></div><div id="waveform" aria-label="原始录音波形及选中范围" aria-describedby="waveform-help"></div><p id="waveform-help" class="waveform-help">在波形上拖动框选 · 拖动选区移动 · 拖动两端裁切（最长 1 秒）</p><div class="axis"><span>0s</span><span id="source-duration"></span></div>
           <div class="slice-heading"><strong id="slice-count"></strong><button id="manual" class="text-button">${icon('plus')}手动选片</button></div><div id="slices" class="slices"></div>
-          <div class="sensitivity"><label for="sensitivity">切分灵敏度</label><input id="sensitivity" type="range" min="0" max="100" value="50"><button id="reslice" class="small-button">重新切分</button></div>
-          <div class="trim-box"><div class="trim-title"><strong>调整选中声音</strong><span id="trim-duration"></span></div><label class="trim-control">起点 <input id="trim-start" type="range" step="0.001" min="0" value="0"><output id="start-value">0.000s</output></label><label class="trim-control">终点 <input id="trim-end" type="range" step="0.001" min="0" value="1"><output id="end-value">1.000s</output></label><button id="preview" class="preview-button">${icon('play')}试听选中声音</button></div>
-          <form id="save-form"><label for="sound-name">给声音起个名字</label><div class="save-row"><input id="sound-name" maxlength="40" placeholder="例如：清脆的杯子声" required><button id="save" class="primary" type="submit">${icon('plus')}存入声音库</button></div></form>
+          <div class="sensitivity"><label for="sensitivity">切分灵敏度</label><input id="sensitivity" type="range" min="0" max="100" value="50"><button id="reslice" class="small-button">重新切分</button></div></div>
+          <div class="selection-editor"><div class="trim-box"><div class="trim-title"><strong>调整选中声音</strong><span id="trim-duration"></span></div><label class="trim-control">起点 <input id="trim-start" type="range" step="0.001" min="0" value="0"><output id="start-value">0.000s</output></label><label class="trim-control">终点 <input id="trim-end" type="range" step="0.001" min="0" value="1"><output id="end-value">1.000s</output></label><button id="preview" class="preview-button">${icon('play')}试听选中声音</button></div>
+          <form id="save-form"><label for="sound-name">给声音起个名字</label><div class="save-row"><input id="sound-name" maxlength="40" placeholder="例如：清脆的杯子声" required><button id="save" class="primary" type="submit">${icon('plus')}存入声音库</button></div></form></div>
         </div>
       </section>
     </div>
   </section>
   <section id="library-view" hidden><div class="library-top"><div><h2>收藏你的声音灵感</h2><p class="muted">每个声音都能成为下一次创作的起点。<span id="capacity">0 / 200</span></p></div><div class="library-actions"><button id="export" class="secondary">${icon('down')}备份到本地</button><button id="restore" class="secondary">${icon('up')}导入备份</button></div></div><p class="storage-note">保存在当前浏览器中。清除网站数据会删除声音，请定期下载备份。</p><div id="library" class="library-grid"></div></section>
-  <section id="characters-view" hidden></section><section id="my-view" hidden><div class="my-heading"><span class="eyebrow"></span><h1>我的</h1><p>登录账号，与课堂连接。</p></div><section id="classroom-view" hidden></section></section>
+  <section id="characters-view" hidden></section><section id="my-view" data-page="home" hidden><div class="my-heading"><span class="eyebrow"></span><h1>我的</h1><p>登录账号，与课堂连接。</p></div><section id="classroom-view" hidden></section><section id="student-avatar-view" hidden><button id="student-avatar-back" class="text-button subpage-back">‹ 返回我的</button></section></section>
   <footer><span>听见日常里的不一样。</span><span>FREE IMPRO · 声音采集基础版</span></footer>
 </main><div id="toast" role="status" aria-live="polite" hidden></div>
 <input id="audio-file" type="file" accept="audio/*" hidden><input id="backup-file" type="file" accept=".json,application/json" hidden>
@@ -57,6 +62,7 @@ document.querySelector('#app').innerHTML = `
 
 const $ = (id) => document.getElementById(id);
 document.body.classList.add('student-app');
+initUIDesign('student');
 if (/FreeImproStudent.*iOS/.test(navigator.userAgent)) document.body.classList.add('ios-student');
 const libraryTools = document.createElement('div'); libraryTools.className = 'library-tools';
 libraryTools.innerHTML = `<div><span class="eyebrow"></span><h1>我的声音库</h1></div><button id="characters-tab" class="secondary">声音形象</button>`;
@@ -70,11 +76,12 @@ const micAnimation = document.createElement('div'); micAnimation.className = 're
 captureOverlay.append($('meter'), $('record-time'), $('record-status')); document.body.append(captureOverlay);
 const imports = document.createElement('div'); imports.className = 'library-imports'; imports.append($('import-audio'), $('demo')); libraryTools.after(imports);
 const cropBack = document.createElement('button'); cropBack.className = 'text-button'; cropBack.textContent = '‹ 返回库'; cropBack.onclick = () => setView('library'); $('studio-view').prepend(cropBack);
-let heldPointer = null;
+let heldPointer = null, captureGesture = false;
 $('studio-tab').setAttribute('aria-label', '长按录音');
 $('studio-tab').oncontextmenu = e => e.preventDefault();
 $('studio-tab').onpointerdown = e => {
   if (!e.isPrimary || e.button !== 0 || busy || recording || heldPointer !== null) return;
+  captureGesture = true;
   e.preventDefault(); heldPointer = e.pointerId; e.currentTarget.setPointerCapture(e.pointerId);
   captureOverlay.hidden = false; startRecording().finally(() => { if (!recording && !busy) captureOverlay.hidden = true; });
 };
@@ -87,35 +94,83 @@ $('studio-tab').onkeyup = e => { if (e.code === 'Space' || e.code === 'Enter') {
 let context, source, sampleRate = 0, slices = [], selected = -1, range = { start: 0, end: 1 };
 let recorder, stream, timer, meterFrame, startedAt, recording = false, busy = false, saveBusy = false;
 let recordingRequest = null;
+let microphoneInput, microphoneAnalyser;
+let nativeCapture = null, playbackRequest = null;
 let libraryImageURLs = [];
 let player, library = [], toastTimer, renameId, deleteId;
 function notify(message, error = false) { $('toast').textContent = message; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 9000 : 4000); }
 function report(error) { console.error(error); notify(error?.message || '操作没有完成，请重试。', true); }
-async function getContext() { context ||= new AudioContext(); if (context.state === 'suspended') await context.resume(); return context; }
-function stopPlayback() { if (player) { player.onended = null; try { player.stop(); } catch {} player = null; } document.querySelectorAll('[data-playing]').forEach(el => { el.removeAttribute('data-playing'); el.innerHTML = icon('play'); }); $('preview').innerHTML = `${icon('play')}试听选中声音`; }
-async function playSamples(samples, rate, button) {
-  const wasPlaying = button?.hasAttribute('data-playing'); stopPlayback(); if (wasPlaying) return;
-  const ctx = await getContext(); const buffer = ctx.createBuffer(1, samples.length, rate); buffer.copyToChannel(samples, 0);
-  player = ctx.createBufferSource(); player.buffer = buffer; player.connect(ctx.destination); player.onended = stopPlayback;
-  if (button) { button.setAttribute('data-playing', ''); button.innerHTML = icon('stop'); }
-  player.start();
+async function getContext(type = 'playback') {
+  const prepared = prepareAudioSession(type);
+  if (!context || context.state === 'closed') context = new AudioContext();
+  // Begin resume in the initiating gesture, and repeat after the native route
+  // change, which can interrupt a previously running iPhone AudioContext.
+  await Promise.all([prepared, resumeAudioContext(context)]);
+  return resumeAudioContext(context);
 }
-function setCaptureBusy(value) { busy = value; $('editor').inert = value; ['record', 'demo', 'import-audio'].forEach(id => $(id).disabled = value); }
-function setView(view) { if (view === 'studio' && !source) view = 'library'; if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); closeSoundPage(); ['studio', 'library', 'characters', 'classroom'].forEach(v => { $(v + '-view').hidden = v !== view; const selected = v === view || (v === 'library' && view === 'characters'); $(v + '-tab').classList.toggle('active', selected); $(v + '-tab').setAttribute('aria-current', selected ? 'page' : 'false'); }); $('my-view').hidden = view !== 'classroom'; document.querySelector('.intro').hidden = true; window.scrollTo({ top: 0, behavior: 'instant' }); }
-$('studio-tab').onclick = () => notify('长按录音，松开完成；最长 15 秒。'); $('library-tab').onclick = () => setView('library');
+function stopPlayback() {
+  const previous = playbackRequest; playbackRequest = null;
+  if (previous?.native) window.FreeImproAudio.stopPlayback(previous.id).catch(report);
+  if (player) { player.onended = null; try { player.stop(); } catch {} player = null; }
+  document.querySelectorAll('[data-playing], [data-starting]').forEach(el => { el.removeAttribute('data-playing'); el.removeAttribute('data-starting'); el.innerHTML = icon('play'); });
+  if (previous?.button) previous.button.innerHTML = previous.html;
+  $('preview').innerHTML = `${icon('play')}试听选中声音`;
+}
+async function playAudio({ samples, rate, blob }, button) {
+  const wasPlaying = button?.hasAttribute('data-playing') || button?.hasAttribute('data-starting'); stopPlayback(); if (wasPlaying) return;
+  const request = playbackRequest = { id: crypto.randomUUID(), native: !!window.FreeImproAudio?.play, button, html: button?.innerHTML };
+  if (button) { button.setAttribute('data-starting', ''); button.innerHTML = icon('stop'); }
+  try {
+    if (request.native) {
+      blob ||= encodeWav(samples, rate);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (playbackRequest !== request) return;
+      const chunks = [];
+      for (let i = 0; i < bytes.length; i += 8192) chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+      const started = await window.FreeImproAudio.play(request.id, btoa(chunks.join('')), blob.type || 'audio/wav');
+      if (playbackRequest !== request) { await window.FreeImproAudio.stopPlayback(request.id); return; }
+      if (!started) throw new Error('声音未能开始播放，请再次点击试听。');
+    } else {
+      const ctx = await getContext(); if (playbackRequest !== request) return;
+      let buffer;
+      if (blob) buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+      else { buffer = ctx.createBuffer(1, samples.length, rate); buffer.copyToChannel(samples, 0); }
+      if (playbackRequest !== request) return;
+      player = ctx.createBufferSource(); player.buffer = buffer; player.connect(ctx.destination);
+      player.onended = () => { if (playbackRequest === request) stopPlayback(); };
+      player.start();
+    }
+    if (playbackRequest === request && button) { button.removeAttribute('data-starting'); button.setAttribute('data-playing', ''); }
+  } catch (error) { if (playbackRequest === request) stopPlayback(); throw error; }
+}
+const playSamples = (samples, rate, button) => playAudio({ samples, rate }, button);
+window.addEventListener('freeimpro-audio-ended', event => { if (event.detail?.id === playbackRequest?.id) stopPlayback(); });
+function setCaptureBusy(value) { busy = value; $('editor').inert = value; ['record', 'demo', 'import-audio'].forEach(id => $(id).disabled = value); window.dispatchEvent(new CustomEvent('freeimpro-student-capture', { detail: { active: value || recording } })); }
+function setView(view) { if (view === 'studio' && !source) view = 'library'; if (recording || busy) { notify('请先完成当前录音。'); return; } stopPlayback(); closeSoundPage(); ['studio', 'library', 'characters', 'classroom'].forEach(v => { $(v + '-view').hidden = v !== view; const selected = v === view || (v === 'library' && view === 'characters'); $(v + '-tab').classList.toggle('active', selected); $(v + '-tab').setAttribute('aria-current', selected ? 'page' : 'false'); }); $('my-view').hidden = view !== 'classroom'; window.dispatchEvent(new CustomEvent('freeimpro-student-view', { detail: { view } })); document.querySelector('.intro').hidden = true; window.scrollTo({ top: 0, behavior: 'instant' }); }
+$('studio-tab').onclick = () => { if (captureGesture) { captureGesture = false; return; } notify('长按录音，松开完成；最长 15 秒。'); }; $('library-tab').onclick = () => setView('library');
 const classroom = initClassroom({ notify, show: () => setView('classroom'), stopPlayback });
+const studentAuth = initStudentAuth({ notify });
+window.addEventListener('freeimpro-student-page', event => {
+  const page = event.detail.page;
+  $('my-view').dataset.page = page;
+  $('student-account').hidden = page !== 'home';
+  $('student-avatar-view').hidden = page !== 'avatar';
+});
+$('student-avatar-back').onclick = () => classroom.openHome();
+const studentAuthResult = new URLSearchParams(location.search).get('student_auth');
+if (['success', 'error'].includes(studentAuthResult)) queueMicrotask(() => {
+  setView('classroom'); classroom.openHome(); studentAuth.open();
+  if (studentAuthResult === 'error') notify('平台授权未完成，请重试或使用账号密码登录。', true);
+  const url = new URL(location.href); url.searchParams.delete('student_auth'); history.replaceState(null, '', url.href);
+});
 let studentImages;
 const characters = initCharacters({ notify, show: () => setView('characters'), onSaved: refreshLibrary, imageWorkflow: () => studentImages });
-studentImages = initStudentImages({ notify, onSaved: refreshLibrary, editIdentity: () => characters.editIdentity() });
-const studentRhythm = createStudentRhythm({ notify, stopPlayback, onSaved: refreshLibrary, onClosed: () => setView('library') });
+studentImages = initStudentImages({ notify, onSaved: refreshLibrary, editIdentity: () => characters.editIdentity(), host: $('student-avatar-view') });
+window.addEventListener('freeimpro-open-image-account', () => { setView('classroom'); classroom.openHome(); classroom.refresh(); });
+window.addEventListener('freeimpro-open-classroom', () => { setView('classroom'); classroom.openSubmit(); });
+const studentRhythm = createStudentRhythm({ notify, stopPlayback, onSaved: () => refreshLibrary({ render: false }), onClosed: () => { setView('library'); refreshLibrary().catch(report); } });
 $('characters-tab').onclick = () => { setView('characters'); characters.refresh(); };
-$('classroom-tab').onclick = () => { setView('classroom'); classroom.refresh(); };
-if (window.webkit?.messageHandlers?.localFiles) {
-  for (const [action, label] of [['settings', '连接设置']]) {
-    const button = document.createElement('button'); button.className = 'text-button'; button.textContent = label; button.onclick = () => window.webkit.messageHandlers.localFiles.postMessage({ action }).catch(report); document.querySelector('.my-heading').append(button);
-  }
-}
-
+$('classroom-tab').onclick = () => { setView('classroom'); classroom.openHome(); classroom.refresh(); };
 installPullRefresh({
   canRefresh: () => !recording && !busy && !recordingRequest && !document.querySelector('dialog[open]'),
   refresh: async () => {
@@ -128,27 +183,108 @@ installPullRefresh({
   onError: report,
 });
 
-function endTracks() { clearTimeout(timer); cancelAnimationFrame(meterFrame); stream?.getTracks().forEach(t => t.stop()); stream = null; $('meter').classList.remove('live'); }
-function stopRecording() {
+function endTracks() {
+  clearTimeout(timer); cancelAnimationFrame(meterFrame);
+  microphoneInput?.disconnect(); microphoneAnalyser?.disconnect(); microphoneInput = microphoneAnalyser = null;
+  stream?.getTracks().forEach(t => t.stop()); stream = null; $('meter').classList.remove('live');
+}
+function restorePlaybackSession() { return prepareAudioSession('playback'); }
+function hasNativeRecording() { return !!(window.FreeImproAudio?.startRecording && window.FreeImproAudio?.stopRecording && window.FreeImproAudio?.recordingLevel); }
+function resetNativeCapture(request) {
+  clearTimeout(request.meterTimer);
+  if (nativeCapture !== request) return;
+  clearTimeout(timer);
+  nativeCapture = null; if (recordingRequest === request) recordingRequest = null;
+  recording = false; heldPointer = null; setCaptureBusy(false);
+  $('studio-tab').classList.remove('recording'); $('record').classList.remove('recording'); $('meter').classList.remove('live');
+  $('record').innerHTML = `${icon('mic')}<span>重新录音</span>`;
+  $('record-status').textContent = '录音已结束，麦克风已关闭'; $('capture-overlay').hidden = true;
+}
+async function finishNativeRecording(request, discard = false) {
+  if (nativeCapture !== request) return;
+  if (discard) {
+    request.finishing = true; resetNativeCapture(request);
+    await window.FreeImproAudio.cancelRecording(request.id).catch(report); return;
+  }
+  if (request.finishing) return;
+  request.finishing = true; clearTimeout(request.meterTimer); clearTimeout(timer); heldPointer = null;
+  if (!request.started) {
+    resetNativeCapture(request);
+    await window.FreeImproAudio.cancelRecording(request.id).catch(report); return;
+  }
+  setCaptureBusy(true); $('record-status').textContent = '正在分析声音…';
+  try {
+    const result = await window.FreeImproAudio.stopRecording(request.id);
+    if (nativeCapture !== request || !result) return;
+    if (result.id !== request.id) throw new Error('录音结果已过期，请重新录制。');
+    if (result.duration < 0.5) { notify('录音太短，请按住至少半秒。'); return; }
+    const { samples, sampleRate: rate } = decodePcmWav(Uint8Array.from(atob(result.encoded), c => c.charCodeAt(0)));
+    const level = audioLevel(samples);
+    if (level.peak <= 0.0001) { notify('没有录到有效声音，请检查麦克风权限、耳机连接，并靠近麦克风重试。', true); return; }
+    // Clear every busy/recording flag before entering the editor so a second
+    // recording never inherits a stopped recorder or pending first request.
+    resetNativeCapture(request); loadAudio(samples, rate, '刚刚录制的声音');
+    if (level.peak < 0.01) notify('录音音量较小，请靠近麦克风或断开蓝牙耳机后重新录制。');
+    if (result.interrupted) notify('录音被系统中断，已保留录到的部分。');
+  } catch (error) { report(error); }
+  finally { resetNativeCapture(request); }
+}
+async function startNativeRecording() {
+  stopPlayback(); setCaptureBusy(true); $('record-status').textContent = '正在请求麦克风权限…';
+  const request = nativeCapture = recordingRequest = { id: crypto.randomUUID(), started: false, finishing: false };
+  try {
+    const started = await window.FreeImproAudio.startRecording(request.id);
+    if (nativeCapture !== request) return;
+    if (!started) { resetNativeCapture(request); return; }
+    request.started = true; recordingRequest = null; recording = true; busy = false; startedAt = performance.now(); $('record').disabled = false;
+    $('studio-tab').classList.add('recording'); $('record').classList.add('recording'); $('meter').classList.add('live');
+    $('record').innerHTML = `${icon('stop')}<span>结束录音</span>`; $('record-status').textContent = '正在聆听 · 15 秒后自动结束';
+    const meter = async () => {
+      if (nativeCapture !== request || request.finishing) return;
+      try {
+        const level = await window.FreeImproAudio.recordingLevel(request.id);
+        if (nativeCapture !== request || request.finishing) return;
+        if (!level.active) { await finishNativeRecording(request); return; }
+        const elapsed = Math.min(MAX_RECORDING, Math.max(0, level.duration || 0));
+        $('record-time').innerHTML = `00:${Math.floor(elapsed).toString().padStart(2, '0')}<span> / 00:15</span>`;
+        const strength = Math.max(0, Math.min(1, (20 * Math.log10(Math.max(level.rms || 0, 0.00001)) + 60) / 60));
+        [...$('meter').children].forEach(bar => { bar.style.height = (2 + strength * 65) + 'px'; });
+        request.meterTimer = setTimeout(meter, 100);
+      } catch (error) { await finishNativeRecording(request, true); report(error); }
+    };
+    meter(); timer = setTimeout(() => finishNativeRecording(request), MAX_RECORDING * 1000);
+  } catch (error) { if (nativeCapture === request) { resetNativeCapture(request); report(error); } }
+}
+window.addEventListener('freeimpro-recording-ended', event => {
+  if (event.detail?.id === nativeCapture?.id) finishNativeRecording(nativeCapture);
+});
+function stopRecording(discard = false) {
+  if (nativeCapture) { finishNativeRecording(nativeCapture, discard); return; }
   heldPointer = null;
   if (!recording) $('capture-overlay').hidden = true;
   if (recordingRequest) {
     recordingRequest = null; setCaptureBusy(false); $('record-status').textContent = '录音已取消，麦克风已关闭';
   }
   if (recorder?.state === 'recording') recorder.stop(); endTracks();
+  restorePlaybackSession().catch(report);
 }
 async function startRecording() {
   if (recording) { stopRecording(); return; }
+  if (hasNativeRecording()) return startNativeRecording();
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { notify('录音需要支持麦克风的浏览器，并通过 HTTPS 或本机 localhost 打开。也可以先导入音频。', true); return; }
   stopPlayback(); setCaptureBusy(true); $('record-status').textContent = '正在请求麦克风权限…';
   const request = recordingRequest = {};
   try {
-    const ctx = await getContext();
+    const ctx = await getContext('play-and-record');
     if (recordingRequest !== request) return;
-    const grantedStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+    const grantedStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: { ideal: 1 }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
     // Permission can resolve after the page/app has left the foreground, or after a new request.
     if (recordingRequest !== request) { grantedStream.getTracks().forEach(track => track.stop()); return; }
     stream = grantedStream;
+    // WebKit can reconfigure the hardware session while granting capture.
+    await prepareAudioSession('play-and-record');
+    await resumeAudioContext(ctx);
+    if (recordingRequest !== request) { grantedStream.getTracks().forEach(track => track.stop()); return; }
     const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t));
     recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
     const chunks = [];
@@ -159,30 +295,45 @@ async function startRecording() {
       $('record-status').textContent = '正在分析声音…';
       try {
         if (performance.now() - startedAt < 500) { notify('录音太短，请按住至少半秒。'); return; }
+        await restorePlaybackSession();
         const buffer = await ctx.decodeAudioData(await new Blob(chunks, { type: recorder.mimeType }).arrayBuffer());
         if (buffer.duration < 0.5) { notify('录音太短，请按住至少半秒。'); return; }
-        setCaptureBusy(false); loadAudio(mono(buffer), buffer.sampleRate, '刚刚录制的声音');
+        const samples = mono(buffer), level = audioLevel(samples);
+        if (level.peak <= 0.0001) { notify('没有录到有效声音，请检查麦克风权限、耳机连接，并靠近麦克风重试。', true); return; }
+        setCaptureBusy(false); loadAudio(samples, buffer.sampleRate, '刚刚录制的声音');
+        if (level.peak < 0.01) notify('录音音量较小，请靠近麦克风或断开蓝牙耳机后重新录制。');
       }
-      catch { notify('未能读取录音，请稍长一点再试，或导入音频。', true); }
+      catch (error) { console.error('录音分析失败', error); notify('未能读取录音，请稍长一点再试，或导入音频。', true); }
       finally { setCaptureBusy(false); $('record-status').textContent = '录音已结束，麦克风已关闭'; $('capture-overlay').hidden = true; }
     };
-    const input = ctx.createMediaStreamSource(stream), analyser = ctx.createAnalyser(); analyser.fftSize = 128; input.connect(analyser);
-    const data = new Uint8Array(analyser.frequencyBinCount);
+    const input = microphoneInput = ctx.createMediaStreamSource(stream), analyser = microphoneAnalyser = ctx.createAnalyser(); analyser.fftSize = 2048; input.connect(analyser);
+    const data = new Float32Array(analyser.fftSize);
     recorder.start(200); recording = true; busy = false; startedAt = performance.now(); $('record').disabled = false;
     $('studio-tab').classList.add('recording'); $('record').classList.add('recording'); $('record').innerHTML = `${icon('stop')}<span>结束录音</span>`; $('record-status').textContent = '正在聆听 · 15 秒后自动结束'; $('meter').classList.add('live');
-    const drawMeter = () => { const elapsed = Math.min(15, (performance.now() - startedAt) / 1000); $('record-time').innerHTML = `00:${Math.floor(elapsed).toString().padStart(2, '0')}<span> / 00:15</span>`; analyser.getByteFrequencyData(data); [...$('meter').children].forEach((bar, i) => bar.style.height = (6 + data[i] / 255 * 65) + 'px'); meterFrame = requestAnimationFrame(drawMeter); };
+    const drawMeter = () => {
+      const elapsed = Math.min(15, (performance.now() - startedAt) / 1000); $('record-time').innerHTML = `00:${Math.floor(elapsed).toString().padStart(2, '0')}<span> / 00:15</span>`;
+      analyser.getFloatTimeDomainData(data);
+      const bars = [...$('meter').children], width = Math.floor(data.length / bars.length);
+      bars.forEach((bar, i) => {
+        const { rms } = audioLevel(data.subarray(i * width, (i + 1) * width));
+        const height = Math.max(0, Math.min(1, (20 * Math.log10(Math.max(rms, 0.00001)) + 60) / 60));
+        bar.style.height = (2 + height * 65) + 'px';
+      });
+      meterFrame = requestAnimationFrame(drawMeter);
+    };
     drawMeter(); timer = setTimeout(stopRecording, MAX_RECORDING * 1000);
     recordingRequest = null;
   } catch (error) {
     if (recordingRequest !== request) return;
     recordingRequest = null;
     endTracks(); recording = false; setCaptureBusy(false); $('record-status').textContent = '点击后允许使用麦克风';
+    restorePlaybackSession().catch(report);
     notify(error.name === 'NotAllowedError' ? '没有麦克风权限，请在浏览器设置中允许录音后重试。' : error.name === 'NotFoundError' ? '没有找到麦克风，可以先导入音频。' : '麦克风暂时无法使用，请检查是否被其他应用占用。', true);
   }
 };
 // Native permission dialogs can hide the WebView. The client reports actual backgrounding via onStop.
 document.addEventListener('visibilitychange', () => { if (document.hidden && !isStudentClient()) stopRecording(); });
-window.addEventListener('pagehide', () => { stopRecording(); stopPlayback(); });
+window.addEventListener('pagehide', () => { stopRecording(true); stopPlayback(); });
 $('demo').onclick = () => { const demo = demoAudio(); loadAudio(demo.samples, demo.sampleRate, '示例 · 三次清脆敲击'); notify('已载入合成示例，可以切片和保存。'); };
 $('import-audio').onclick = () => $('audio-file').click();
 $('audio-file').onchange = async e => {
@@ -275,7 +426,7 @@ waveform.addEventListener('lostpointercapture', finishWaveDrag);
 function drawWave() {
   if (source) waveDisplay.update(source, sampleRate, range);
 }
-$('play-original').onclick = () => playSamples(source, sampleRate).catch(report);
+$('play-original').onclick = () => playSamples(source, sampleRate, $('play-original')).catch(report);
 $('preview').onclick = () => playSamples(trimSamples(source, sampleRate, range.start, range.end), sampleRate, $('preview')).catch(report);
 $('save-form').onsubmit = async e => {
   e.preventDefault(); if (saveBusy || !source || recording || busy) return; const name = $('sound-name').value.trim(); if (!name) { $('sound-name').focus(); return; }
@@ -283,7 +434,7 @@ $('save-form').onsubmit = async e => {
   try { const samples = trimSamples(source, sampleRate, range.start, range.end); await saveSounds([{ id: crypto.randomUUID(), name, createdAt: Date.now(), duration: samples.length / sampleRate, blob: encodeWav(samples, sampleRate) }]); await refreshLibrary(); $('step3').classList.add('current'); notify(`“${name}”已保存在这台设备`); }
   catch (error) { report(error); } finally { saveBusy = false; $('save').disabled = false; }
 };
-async function refreshLibrary() { library = await listSounds(); $('library-count').textContent = library.length; $('capacity').textContent = `${library.length} / ${LIMIT}`; renderLibrary(); window.dispatchEvent(new Event('sounds-changed')); }
+async function refreshLibrary({ render = true } = {}) { library = await listSounds(); $('library-count').textContent = library.length; $('capacity').textContent = `${library.length} / ${LIMIT}`; if (render) renderLibrary(); window.dispatchEvent(new Event('sounds-changed')); }
 function renderLibrary() {
   libraryImageURLs.forEach(url => URL.revokeObjectURL(url)); libraryImageURLs = [];
   if (!soundPage.hidden) { closeSoundPage(); $('library-view').hidden = false; }
@@ -300,10 +451,10 @@ function renderLibrary() {
     const editCharacter = document.createElement('button'); editCharacter.className = 'character-edit secondary'; editCharacter.textContent = sound.photo ? '编辑形象' : '制作形象'; editCharacter.onclick = () => characters.editSound(sound); card.querySelector('.sound-details').append(editCharacter);
     const rhythmButton = document.createElement('button'); rhythmButton.className = 'secondary'; rhythmButton.textContent = '节奏编创'; rhythmButton.onclick = () => studentRhythm.edit(sound); card.querySelector('.sound-details').append(rhythmButton);
     const play = card.querySelector('.sound-play'); play.innerHTML = icon('play'); play.setAttribute('aria-label', `试听 ${sound.name}`);
-    play.onclick = async () => { try { if (play.hasAttribute('data-playing')) { stopPlayback(); return; } const ctx = await getContext(); const buffer = await ctx.decodeAudioData(await sound.blob.arrayBuffer()); await playSamples(buffer.getChannelData(0), buffer.sampleRate, play); } catch (error) { report(error); } };
-    card.querySelector('.rename').onclick = () => { renameId = sound.id; $('rename-input').value = sound.name; $('name-dialog').showModal(); };
-    card.querySelector('.delete').onclick = () => { deleteId = sound.id; $('delete-dialog').showModal(); };
-    card.querySelector('.download').onclick = () => download(sound.blob, sound.name.replace(/[\\/:*?"<>|]/g, '_') + '.wav').catch(report);
+    play.onclick = () => playAudio({ blob: sound.blob }, play).catch(report);
+    card.querySelector('.rename').onclick = () => { renameId = sound.id; $('rename-input').value = sound.name; $('name-dialog').returnValue = ''; $('name-dialog').showModal(); };
+    card.querySelector('.delete').onclick = () => { deleteId = sound.id; $('delete-dialog').returnValue = ''; $('delete-dialog').showModal(); };
+    card.querySelector('.download').onclick = () => download(sound.blob, sound.name.replace(/[\\/:*?"<>|]/g, '_') + '.wav').then(saved => { if (saved) notify(isStudentClient() ? 'WAV 已保存到本地' : '已发起 WAV 下载'); }).catch(report);
     const submit = document.createElement('button'); submit.className = 'submit-sound secondary'; submit.textContent = '提交'; submit.onclick = () => classroom.chooseSound(sound);
     const art = card.querySelector('.sound-art');
     const open = document.createElement('button'); open.className = 'sound-open'; open.setAttribute('aria-label', `打开声音 ${sound.name}`);
@@ -316,11 +467,22 @@ function renderLibrary() {
 
   });
 }
-$('name-dialog').onclose = async () => { if ($('name-dialog').returnValue !== 'save') return; const sound = library.find(s => s.id === renameId), name = $('rename-input').value.trim(); if (!sound || !name) return; try { await saveSounds([{ ...sound, name }]); await refreshLibrary(); notify('名称已更新'); } catch (e) { report(e); } };
+$('name-dialog').onclose = async () => { if ($('name-dialog').returnValue !== 'save') return; const id = renameId, name = $('rename-input').value.trim(); if (!id || !name) return; try { const updated = await updateSound(id, latest => ({ ...latest, name })); await refreshLibrary(); if (!updated) { notify('这份声音已被删除，无法修改名称。', true); return; } notify('名称已更新'); } catch (e) { report(e); } };
 $('delete-dialog').onclose = async () => { if ($('delete-dialog').returnValue !== 'delete') return; try { stopPlayback(); await deleteSound(deleteId); await refreshLibrary(); notify('声音已删除'); } catch (e) { report(e); } };
 function download(blob, name) { return exportLocalFile(blob, name); }
 function asDataURL(blob) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }); }
-$('export').onclick = async () => { $('export').disabled = true; try { const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, ...item }) => ({ ...item, audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null }))); const saved = await download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version: 2, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`); if (saved !== false) notify('备份已保存到设备本地。'); } catch (e) { report(e); } finally { $('export').disabled = !library.length; } };
+$('export').onclick = async () => {
+  $('export').disabled = true;
+  try {
+    const sounds = await Promise.all(library.map(async ({ blob, photo, avatar, propPhoto, objectProp, ...item }) => ({
+      ...item, ...await encodeAvatarBackup({ objectProp, propPhoto }, asDataURL),
+      audio: await asDataURL(blob), photo: photo ? await asDataURL(photo) : null, avatar: avatar ? await asDataURL(avatar) : null,
+    })));
+    const version = sounds.some(sound => sound.objectProp) ? 3 : 2;
+    const saved = await download(new Blob([JSON.stringify({ format: 'free-impro-sounds', version, sounds })], { type: 'application/json' }), `free-impro-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    if (saved !== false) notify('备份已保存到设备本地。');
+  } catch (e) { report(e); } finally { $('export').disabled = !library.length; }
+};
 $('restore').onclick = () => $('backup-file').click();
 let restoringBackup = false;
 $('backup-file').onchange = async e => {
@@ -330,16 +492,17 @@ $('backup-file').onchange = async e => {
   try {
     if (file.size > 250 * 1024 * 1024) throw new Error('备份文件过大，请选择本应用导出的备份。');
     const backup = JSON.parse(await file.text());
-    if (backup.format !== 'free-impro-sounds' || ![1, 2].includes(backup.version) || !Array.isArray(backup.sounds) || backup.sounds.length > LIMIT) throw new Error('不是有效的声音库备份。');
+    if (backup.format !== 'free-impro-sounds' || ![1, 2, 3].includes(backup.version) || !Array.isArray(backup.sounds) || backup.sounds.length > LIMIT) throw new Error('不是有效的声音库备份。');
     const ctx = await getContext(), items = [], ids = new Set();
     for (const item of backup.sounds) {
       if (typeof item.id !== 'string' || !item.id || item.id.length > 100 || ids.has(item.id) || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 40 || !Number.isFinite(item.createdAt) || typeof item.audio !== 'string' || item.audio.length > 600000 || !/^data:audio\/wav;base64,[A-Za-z0-9+/=]+$/.test(item.audio)) throw new Error('备份包含无效作品，尚未导入任何内容。');
       ids.add(item.id); const bytes = Uint8Array.from(atob(item.audio.split(',')[1]), c => c.charCodeAt(0)); const buffer = await ctx.decodeAudioData(bytes.buffer);
       if (buffer.duration <= 0 || buffer.duration > 1.0001) throw new Error('备份中的声音超过 1 秒，未导入。');
-      const photo = backup.version === 2 && item.photo ? await imageFromDataURL(item.photo) : null;
-      const avatar = backup.version === 2 && item.avatar ? await imageFromDataURL(item.avatar) : null;
+      const photo = backup.version >= 2 && item.photo ? await imageFromDataURL(item.photo) : null;
+      const avatar = backup.version >= 2 && item.avatar ? await imageFromDataURL(item.avatar) : null;
+      const companion = backup.version === 3 ? await decodeAvatarBackup(item) : {};
       const rhythm = item.rhythm === undefined ? undefined : validateRhythm(item.rhythm);
-      items.push({ photo, avatar, ...(rhythm ? { rhythm } : {}), id: item.id, name: item.name.trim(), createdAt: item.createdAt, duration: buffer.duration, blob: encodeWav(buffer.getChannelData(0), buffer.sampleRate) });
+      items.push({ photo, avatar, ...companion, ...(rhythm ? { rhythm } : {}), id: item.id, name: item.name.trim(), createdAt: item.createdAt, duration: buffer.duration, blob: encodeWav(buffer.getChannelData(0), buffer.sampleRate) });
     }
     const imported = await importSounds(items); await refreshLibrary(); notify(`已导入 ${imported} 份声音，相同 ID 的已有作品已跳过。`);
   } catch (error) { notify(error instanceof SyntaxError ? '备份文件无法解析，未导入任何内容。' : error.message || '导入失败，原有作品未改变。', true); }
@@ -348,4 +511,4 @@ $('backup-file').onchange = async e => {
 setView('library');
 refreshLibrary().catch(() => notify('无法打开本地声音库，请退出无痕模式或检查浏览器存储权限。', true)).finally(() => { document.documentElement.dataset.studentReady = 'true'; });
 initOffline();
-window.addEventListener('freeimpro-background', stopRecording);
+window.addEventListener('freeimpro-background', () => { stopRecording(true); stopPlayback(); });

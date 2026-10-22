@@ -1,0 +1,111 @@
+/* The native iPad app owns orientation. Layout follows the available window,
+   including resizable Android tablet windows and the on-screen keyboard. */
+.student-app { min-height: 100dvh; }
+.student-app main {
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  padding-left: max(5%, env(safe-area-inset-left, 0px));
+  padding-right: max(5%, env(safe-area-inset-right, 0px));
+}
+.student-app .source-editor,
+.student-app .selection-editor,
+.student-app .character-grid > *,
+.student-app .sound-detail-content > * { min-width: 0; }
+.student-app .character-sound { flex-wrap: wrap; }
+.student-app .character-sound select { min-width: 0; width: 100%; flex-basis: 220px; }
+.student-app .character-sound label { flex-shrink: 0; }
+.student-app .character-sound .muted { overflow-wrap: anywhere; }
+.student-app .photo-actions { flex-wrap: wrap; }
+.student-app .crop-slider input { min-width: 0; }
+.student-app #library .sound-card { min-width: 0; }
+.student-app #capture-overlay {
+  bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px) + 24px);
+  max-height: calc(100dvh - var(--nav-height) - env(safe-area-inset-bottom, 0px) - 48px);
+  overflow-y: auto;
+}
+.student-app .student-bottom-nav {
+  padding-left: max(24px, env(safe-area-inset-left, 0px));
+  padding-right: max(24px, env(safe-area-inset-right, 0px));
+}
+
+@media (min-width: 900px) and (min-height: 500px) and (orientation: landscape) {
+  .student-app { --nav-height: 96px; }
+  .student-app main {
+    max-width: 1160px;
+    padding: max(24px, env(safe-area-inset-top, 0px)) max(32px, env(safe-area-inset-right, 0px)) 24px max(32px, env(safe-area-inset-left, 0px));
+  }
+  .student-app .student-bottom-nav { width: min(100%, 720px); }
+  .student-app .student-bottom-nav .nav-item { min-height: 60px; }
+  .student-app .library-tools,
+  .student-app .my-heading { padding: 8px 0 20px; }
+  .student-app .library-top { margin: 20px 0; }
+  .student-app .library-imports { gap: 24px; }
+  .student-app .library-imports .text-button,
+  .student-app #studio-view > .text-button,
+  .student-app #sound-page > .text-button { min-height: 44px; font-size: 13px; }
+  .student-app #library { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px 24px; padding: 16px 0; }
+  .student-app .sound-open { width: 104px; height: 104px; }
+  .student-app .edit-panel { padding-top: 8px; }
+  .student-app #editor { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, 1fr); gap: 32px; align-items: start; margin-top: 20px; }
+  .student-app .source-info { margin-top: 0; }
+  .student-app .source-editor .text-button,
+  .student-app .source-editor .small-button { min-height: 44px; }
+  .student-app .trim-control { min-height: 48px; }
+  .student-app .trim-control input { height: 44px; }
+  .student-app .save-row { flex-wrap: wrap; }
+  .student-app .save-row input { flex-basis: 100%; }
+  .student-app .save-row .primary { width: 100%; }
+  .student-app .sound-detail-content { display: grid; grid-template-columns: minmax(240px, .85fr) minmax(0, 1.15fr); max-width: 900px; gap: 24px; align-items: start; }
+  .student-app .sound-detail-content .sound-art { height: 280px; border-radius: 16px; }
+  .student-app .sound-detail-content .sound-details { padding: 8px 0; }
+  .student-app .sound-detail-content .sound-actions { margin-top: 20px; padding-top: 12px; }
+  .student-app .sound-detail-content .sound-actions .text-button { min-height: 44px; font-size: 12px; }
+  .student-app .sound-detail-content .sound-details > .secondary { width: 100%; margin-top: 16px; }
+  .student-app .character-grid { gap: 32px; }
+  .student-app .character-grid > .panel { padding-top: 0; }
+  .student-app .photo-empty,
+  .student-app .character-preview { min-height: 0; width: 100%; max-width: 360px; aspect-ratio: 1; margin: 20px auto; }
+  .student-app #photo-canvas { max-width: 360px; margin: 20px auto; }
+  .student-app .crop-slider { min-height: 44px; }
+  .student-app .crop-slider input { height: 44px; }
+  .student-app .student-subpage-home { max-width: 960px; padding-top: 16px; }
+  .student-app .student-subpage-grid { gap: 24px; }
+  .student-app .student-subpage-card { min-height: 180px; padding: 28px; }
+
+  /* Keep all sixteen steps in view while giving tablet controls full touch targets. */
+  .student-app .student-rhythm { padding: max(20px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(24px, env(safe-area-inset-left, 0px)); gap: 16px; }
+  .student-app .student-rhythm-heading h2 { font-size: 24px; }
+  .student-app .student-rhythm-heading [data-name] { font-size: 13px; margin-top: 6px; }
+  .student-app .rhythm-landscape-content { gap: 16px; }
+  .student-app .student-rhythm .rhythm-controls { grid-template-columns: 136px 240px; gap: 16px; }
+  .student-app .student-rhythm .rhythm-control { gap: 6px; font-size: 13px; }
+  .student-app .rhythm-stepper { grid-template-columns: 44px minmax(0, 1fr) 44px; }
+  .student-app .rhythm-tempo { grid-template-columns: 44px minmax(0, 1fr) 44px 32px; }
+  .student-app .student-rhythm .secondary,
+  .student-app .student-rhythm .primary,
+  .student-app .student-rhythm .rhythm-controls .secondary { min-height: 44px; }
+  .student-app .student-rhythm .rhythm-controls input[type="range"] { height: 44px; }
+  .student-app .student-rhythm .rhythm-pages button { min-height: 44px; }
+  .student-app .student-rhythm-grid .rhythm-dot { width: min(44px, 76%); }
+  .student-app .student-rhythm-grid .rhythm-dot-number { font-size: 13px; }
+  .student-app .rhythm-actions { gap: 12px; }
+  .student-app .student-rhythm [data-status] { font-size: 13px; }
+}
+
+@media (min-width: 900px) and (min-height: 500px) and (max-height: 650px) and (orientation: landscape) {
+  .student-app main { padding-top: max(12px, env(safe-area-inset-top, 0px)); }
+  .student-app .edit-panel { padding-top: 0; }
+  .student-app .edit-panel > .panel-top,
+  .student-app .edit-panel > .muted { display: none; }
+  .student-app .edit-panel > h2 { margin: 6px 0 10px; }
+  .student-app #editor { margin-top: 8px; gap: 24px; }
+  .student-app .slice { min-height: 64px; padding: 6px; }
+}
+
+@media (min-width: 1180px) and (min-height: 500px) and (orientation: landscape) {
+  .student-app #library { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+/* Android split-screen and smaller portrait windows keep a single editor column. */
+@media (max-width: 740px) {
+  .student-app .character-sound select { flex-basis: auto; }
+}

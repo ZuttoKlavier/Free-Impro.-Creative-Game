@@ -9,21 +9,55 @@ class FakeContext {
   }
   createBufferSource() {
     const context = this;
-    const source = { playbackRate: { value: 1 }, connect() {}, disconnect() {}, start(time) { this.time = time; }, stop() { this.stoppedAt = context.currentTime; } };
+    const source = { playbackRate: { value: 1 }, detune: { value: 0 }, connect() {}, disconnect() {}, start(time, offset, duration) { Object.assign(this, { time, offset, duration }); }, stop() { this.stoppedAt = context.currentTime; } };
     this.sources.push(source);
     return source;
   }
 }
 
-test('a held sample triggers once and spans four step durations', async () => {
+test('a held sample triggers once at its original speed and leaves the remaining slot silent', async () => {
   const { engine, context, add, advance, notes } = setup();
   const pattern = Array(16).fill(false); pattern[0] = 4;
-  add('held', { buffer: { duration: .2 }, pattern }); engine.setBpm(120); engine.setActive('held', true); await engine.play();
+  const buffer = { duration: .2 };
+  add('held', { buffer, pattern }); engine.setBpm(120); engine.setActive('held', true); await engine.play();
   advance(.6);
   assert.equal(notes().length, 1);
-  assert.equal(context.sources[0].playbackRate.value, 1);
+  const [source] = context.sources;
+  assert.equal(source.buffer, buffer);
+  assert.equal(source.playbackRate.value, 1);
+  assert.equal(source.detune.value, 0);
+  assert.equal(source.offset, 0);
+  assert.equal(source.duration, .2);
   engine.dispose();
 });
+
+for (const { note, recordingDuration, playedDuration } of [
+  { note: true, recordingDuration: .4, playedDuration: .0625 },
+  { note: 4, recordingDuration: .1, playedDuration: .1 },
+  { note: 4, recordingDuration: .4, playedDuration: .25 },
+]) {
+  test(`a ${String(note)}-step note plays only ${playedDuration}s of the unchanged ${recordingDuration}s recording`, async () => {
+    const { engine, context, add } = setup();
+    const sampleRate = 8000;
+    const channels = Array.from({ length: 2 }, (_, channel) => Float32Array.from({ length: recordingDuration * sampleRate }, (_, i) => Math.sin(i * .17 + channel) * .4));
+    const original = channels.map(samples => samples.slice());
+    const buffer = { duration: recordingDuration, sampleRate, length: channels[0].length, numberOfChannels: channels.length, getChannelData: channel => channels[channel] };
+    const pattern = Array(16).fill(false); pattern[0] = note;
+    add('recording', { buffer, pattern }); engine.setBpm(240); engine.setActive('recording', true);
+    try {
+      await engine.play();
+      const [source] = context.sources;
+      assert.equal(context.sources.length, 1);
+      assert.equal(source.buffer, buffer);
+      assert.deepEqual(channels, original);
+      assert.equal(source.playbackRate.value, 1);
+      assert.equal(source.detune.value, 0);
+      assert.equal(source.time, .025);
+      assert.equal(source.offset, 0);
+      assert.equal(source.duration, playedDuration);
+    } finally { engine.dispose(); }
+  });
+}
 
 function setup(callbacks = {}) {
   const context = new FakeContext();
@@ -203,12 +237,27 @@ test('tempo and swing change the remaining step continuously; paired swing durat
   const start = context.currentTime + 0.025;
   advance(start + 0.2);
   const swung = notes().filter((source) => source.time >= start - 1e-9);
-  assert.ok(Math.abs(swung[1].time - swung[0].time - 0.09375) < 1e-9);
-  assert.ok(Math.abs(swung[2].time - swung[1].time - 0.03125) < 1e-9);
-  assert.ok(Math.abs(swung[2].time - swung[0].time - 0.125) < 1e-9);
+  assert.ok(Math.abs(swung[1].time - swung[0].time - 1 / 12) < 1e-9);
+  assert.ok(Math.abs(swung[2].time - swung[1].time - 1 / 24) < 1e-9);
+  assert.ok(Math.abs(swung[2].time - swung[0].time - .125) < 1e-9);
   const progress = engine.getState().progress;
   engine.setSwing(0.2);
   assert.ok(Math.abs(engine.getState().progress - progress) < 1e-9);
+  engine.dispose();
+});
+
+test('maximum Swing alternates adjacent cells at 2:1 while keeping every pair and the loop aligned', async () => {
+  const { engine, add, advance, notes } = setup();
+  engine.setBpm(120); engine.setSwing(.5);
+  add('sixteenths', { pattern: Array(16).fill(true) });
+  engine.setActive('sixteenths', true); await engine.play();
+  advance(2.05);
+  const onsets = notes().map(source => Number((source.time - .025).toFixed(6)));
+  assert.deepEqual(onsets.slice(0, 17), [0, .166667, .25, .416667, .5, .666667, .75, .916667, 1, 1.166667, 1.25, 1.416667, 1.5, 1.666667, 1.75, 1.916667, 2]);
+  const progress = engine.getState().progress;
+  engine.setSwing(0);
+  assert.ok(Math.abs(engine.getState().progress - progress) < 1e-9);
+  assert.equal(engine.getState().swing, 0);
   engine.dispose();
 });
 
@@ -275,7 +324,7 @@ test('audible countdown covers all bars, follows tempo and swing, and resets onl
     engine.setBpm(120); engine.setSwing(swing); engine.setBars(bars);
     add('a'); engine.setActive('a', true); await engine.play();
     assert.ok(Math.abs(engine.getState().remaining - (bars * 2 + .025)) < 1e-9);
-    const elapsed = .125 * (1 + swing) * .6;
+    const elapsed = .125 * (1 + swing * 2 / 3) * .6;
     advance(.025 + elapsed);
     let state = engine.getState();
     assert.ok(Math.abs(state.remaining - (bars * 2 - elapsed)) < 1e-9);

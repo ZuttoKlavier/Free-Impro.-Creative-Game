@@ -2,7 +2,11 @@
 
 按学生自有平板、只能安装普通应用的条件实现。最低 Android 10（API 29），需要可用的 Android System WebView。教师电脑继续运行局域网 HTTPS 课堂服务。
 
-2026-10-06 已生成 0.4.0 测试 APK，位于 `data/releases/free-impro-student-0.4.0-test.apk`，并提供同名 `.sha256` 文件。当前源码编译、13 项学生原生单元测试、Lint 零错误和 APK 测试签名检查通过；首次设置取消的设备回归 APK 也已编译。安装包仅含课堂 CA 公钥，不含私钥。目前没有连接安卓真机或模拟器；实际安装、相机/麦克风、系统分享回调和文件迁移尚未通过设备验收，不作为正式发布版本。
+2026-10-16～17 开始小米 Android 16 真机现场验收，逐项结果、实际 APK/网页版本和 no-go 边界见[安卓真机最小验收矩阵](android-real-device-acceptance.md)。首轮发现 WebView 录音缺少普通权限 `MODIFY_AUDIO_SETTINGS`，已补权限并沿用原测试签名覆盖，实际录音、保存及回听子项通过；预缓存后的离线冷开、照片备份和跨来源导入也已有局部现场结果。WAV 文件实际写出而没有完成提示的问题已补反馈，真机反馈和课堂互通仍按矩阵逐项核对。这些局部结果不表示全部设备场景通过或安卓端可发布，历史记录保留原日期与范围。
+
+2026-10-16 补齐学生端与教师端的平板窗口适配：WebView 按页面 viewport 使用实际可用宽度，允许横竖屏和窗口缩放；横竖屏、窗口大小、最小宽度及屏幕布局变化时保留当前 Activity/WebView，减少旋转和分屏导致的作品页重载。学生页面按可用窗口宽度自适应，平板横屏使用宽布局。Android 不新增方向锁，也不修改 SDK 目标版本；[Android 官方适配说明](https://developer.android.com/develop/adaptive-apps/guides/app-orientation-aspect-ratio-resizability)明确新版大屏系统可能忽略方向及窗口限制。真机旋转、分屏、软键盘和相机预览仍须验收。
+
+2026-10-06 已生成历史 0.4.0 测试 APK，位于 `data/releases/free-impro-student-0.4.0-test.apk`，并提供同名 `.sha256` 文件。当时源码编译、13 项学生原生单元测试、Lint 零错误和 APK 测试签名检查通过；首次设置取消的设备回归 APK 也已编译，但当时未连接设备。安装包仅含课堂 CA 公钥，不含私钥，不作为正式发布版本。10 月 16～17 日后续真机局部结果见上文矩阵，不能回填为历史包全部通过。
 
 0.3.0（2026-09-30）及更早的本地 APK 是历史测试包，不能作为当前扫码、分享导入、管理入口和脚本失效兜底的构建证据。2026-10-06 的网页侧原生桥由课堂服务器发布，APK 和课堂服务均须使用当前源码。
 
@@ -16,7 +20,9 @@
 4. “我的”中的“连接设置”先验证教师管理码；五次错误尝试后等待一分钟。页面无法加载、脚本未就绪或首次设置取消时，底部恢复入口可以重新打开教师设置，正常页面不显示这组原生按钮。已有管理码仍须验证；忘记管理码没有后门。迁移前先主动导出，切勿用清除应用数据或卸载代替备份。
 5. 主页面连接失败会保留错误提示，恢复 Wi-Fi 后下拉至少 80 dp 并松手，可重试原课堂地址；不再显示顶部“重新连接”按钮。成功载入但学生脚本在约 10 秒内未就绪时，也启用同一原生重连兜底；多指、横向或未达到松手阈值的手势不会重连。首次配置未完成时，下拉打开配置而不加载课堂。证书错误不能通过重试跳过校验。
 
-应用没有浏览器地址栏，不启动系统浏览器、设置、相机或通用文件选择器。只允许配置的课堂 HTTPS 来源，页面导航限制在应用首页及六位课堂码链接；资源请求限定在课堂 API 和构建文件。拦截外部 URL、`intent:`、`file:`、`content:` 页面、数据页面、新窗口、长按链接菜单和位置权限。WebView 调试关闭；SSL 校验失败始终取消，不提供忽略证书错误的入口。Service Worker 请求也使用同一来源限制。
+应用没有浏览器地址栏，课堂页面不开放通用外部浏览、系统设置、相机或文件选择器。学生主动选择微信登录时，使用受控系统浏览器授权：仅由原生代码启动固定公共课堂域名的授权地址，用原生私有证明兑换一次性回调票据。Android 不提供 Apple 登录，网页与原生桥均拒绝 Apple 调用。当前微信使用网站扫码，真实平台尚缺凭据。只允许配置的课堂 HTTPS 来源，页面导航限制在应用首页及六位课堂码链接；资源请求限定在课堂 API 和构建文件。拦截普通外部 URL、`intent:`、`file:`、`content:` 页面、数据页面、新窗口、长按链接菜单和位置权限。WebView 调试关闭；SSL 校验失败始终取消，不提供忽略证书错误的入口。Service Worker 请求也使用同一来源限制。
+
+2026-10-14 原生授权更新通过 19 项 Java 检查、Debug 构建和 Lint（0 错误）；2026-10-15 收尾核对沿用这些构建证据。当时测试包为 `data/releases/free-impro-student-0.4.0-wechat-auth-20261014-test.apk`，已删除 Android Apple 专用分支与实现，原生仅接受微信，沿用旧 0.4.0 测试包的同一签名，另附校验值和验证记录。共享学生页面直接不生成 Apple 按钮、说明或绑定标记，没有 CSS 隐藏的 Apple 元素。该轮 9 项浏览器检查最终通过，覆盖网页及 Android 的 Apple 删除和 iOS 的保留；2026-10-15 00:30（北京时间）实际本机 HTTPS 首页经课堂 CA 校验确认提供此版页面资产 `/assets/student-F1e2kueC.js`。该轮未连接 Android 设备或完成真人平台登录；后续真机测试未补上真实微信登录，详见[学生登录方案](student-auth.md)。
 
 **普通应用只能限制自己内部的功能，不能锁住整台学生自有设备。** 学生仍能按 Home、切换其他应用、打开系统设置、卸载应用或清除应用数据。管理码也不能防止设备所有者清除应用数据后重新配置。此版本不申请设备所有者权限，不声称具备全设备自助终端保护；若未来必须禁止退出和系统浏览器，需要转为学校受管设备与安卓 Lock Task 模式，见 [Android 官方专用设备说明](https://developer.android.com/work/dpc/dedicated-devices/lock-task-mode)。
 
@@ -43,6 +49,51 @@ cd android
 
 项目已包含 Gradle 8.11.1 Wrapper，并固定官方发行包的 SHA-256，无需另装全局 Gradle；Windows 使用 `gradlew.bat`。如果 HTTPS 端口不是默认 8443，加入 `-PclassroomPort=你的端口`。证书来自 `data/https/classroom-ca.crt`，默认地址来自该目录的 `config.json`。替换了 CA 时必须重新构建并安装应用；仅 IP 变化且保留同一 CA 时可重新签发服务证书，再验证管理码后修改应用内课堂地址。
 
+### 公开课堂安装包准备
+
+在独立发布源码副本的 `android/` 目录中，显式选择当前原生信任策略支持的公开地址：
+
+```sh
+./gradlew -PclassroomUrl=https://class.empfreeimpro.xyz/ :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+```
+
+`classroomUrl` 仅接受上述完整地址，其他域名、HTTP、账号、端口、路径、查询参数和片段均拒绝；不得同时传入 `classroomPort`。不传 `classroomUrl` 时仍使用原有 LAN 地址和端口。公开模式不读取本机 LAN `config.json`，只把公开 URL 写入应用默认配置；仍保留 `classroom-ca.crt` 公钥供 LAN 连接使用，不复制 CA 私钥或整个证书目录。公开域名使用系统证书信任，必须有真实有效的公开 HTTPS 证书。
+
+构建前核对已有测试签名，不能自动生成新私钥或替换原签名；签名不兼容时不能以卸载解决旧作品保留问题。上述 Debug 包供受控测试，不等同于正式发布包。已安装应用保存的地址不会被新默认值覆盖，需通过教师管理码修改；Android 的网站来源改变会切换本地作品库，先从旧地址导出备份，再在新地址导入。真实设备的安装、证书、入课、提交、教师接收和再次连接仍需单独验证，构建通过不表示公网已经上线。
+
+### 正式签名候选（不自动发布）
+
+当前学生源码为 **0.4.1 / versionCode 5**，包名仍为 `org.freeimpro.student`。`data/releases/` 内的 0.4.0 / 4 是历史测试包；现有 `app-debug.apk` 即使版本为 0.4.1 / 5，也仍使用测试签名。版本号增加、关闭 WebView 调试或 Debug 包验签成功都不表示正式发布完成。
+
+Release 只使用事先确定的发布身份，绝不创建密钥或回退到测试签名。将已有密钥及签名配置保存在仓库外的受保护位置。配置文件使用 UTF-8 Java properties，包含下列字段；以下只是字段说明，不是可用凭据：
+
+| 字段 | 要求 |
+| --- | --- |
+| `storeFile` | 已有 keystore 的绝对路径，必须位于仓库之外 |
+| `storeType` | `JKS`（默认）或实际 keystore 类型，如 `PKCS12` |
+| `storePassword` / `keyPassword` | 现有存储与私钥密码，不通过 `-P` 或命令行传入 |
+| `keyAlias` | 已有发布私钥别名 |
+| `certificateSha256` | 从可信发布记录独立核对的证书 SHA-256，64 位十六进制，可带冒号；不能只把当前读到的未知证书指纹填作预期值 |
+
+配置文件及 keystore 都必须是仓库外现有普通文件；POSIX 系统要求仅所有者可访问（例如 `chmod 600`），Windows 需由操作方核对仅发布操作员及必要系统身份可读的 ACL。Java properties 中的 Windows 路径使用 `/` 或按格式转义反斜杠。文件路径通过 `FREE_IMPRO_ANDROID_RELEASE_SIGNING_FILE` 环境变量提供。未指定配置文件时，也可由受保护的构建环境提供 `FREE_IMPRO_ANDROID_RELEASE_STORE_FILE`、`STORE_TYPE`、`STORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`、`CERTIFICATE_SHA256`（后五项均使用相同 `FREE_IMPRO_ANDROID_RELEASE_` 前缀）。两种来源不混合；不要把秘密放入仓库 `gradle.properties`、命令行、网页包或日志，签名构建关闭 configuration cache。
+
+在已准备上述环境的独立候选源码副本 `android/` 中执行：
+
+```sh
+./gradlew --no-daemon --no-configuration-cache -PclassroomUrl=https://class.empfreeimpro.xyz/ :app:verifyReleaseSigning
+./gradlew --no-daemon --no-configuration-cache -PclassroomUrl=https://class.empfreeimpro.xyz/ :app:assembleRelease
+# 只有所选分发渠道要求 Android App Bundle 时，另构建：
+./gradlew --no-daemon --no-configuration-cache -PclassroomUrl=https://class.empfreeimpro.xyz/ :app:bundleRelease
+```
+
+Release 强制显式固定公网地址；缺少签名字段、文件权限不合要求、证书过期、指纹不符或使用现有测试证书/标准 Android Debug 身份均失败。检查只读取已有签名材料。Debug 的 LAN 默认地址及原测试签名路径不变。Release APK 输出至 `android/app/build/outputs/apk/release/app-release.apk`，AAB 输出至 `android/app/build/outputs/bundle/release/app-release.aab`；这些是本机构建候选，命令不上传或分发。
+
+分发前独立验签，并记录产物 SHA-256、包名、版本、发布证书指纹、默认来源、CA 公钥及同轮网页/服务源码哈希。APK 用 Android Build Tools 的 `apksigner verify --verbose --print-certs`；AAB 使用 JDK 的 JAR 签名核验，不能用 APK 验签结果代替。确认具体渠道及其交付要求后，再用同一候选完成真实设备安装/升级、数据保留、公开 HTTPS 和课堂验收；当前会话连续性 no-go 及其他未测项仍以[真机矩阵](android-real-device-acceptance.md)为准。
+
+正式签名与现有测试签名不同，不能直接覆盖同包名测试安装。不得卸载或清数据来绕过签名不兼容；保留原测试设备、旧来源和可读外部备份，在获准的独立受控设备验证正式候选及迁移。尚未提供和核验真实发布密钥，因此补齐上述配置不能记作“正式签名包已生成”或“可正式发布”。
+
+2026-10-20 本地检查：LAN Debug 构建、19 项 Java 单测和 Lint（0 错误、7 条警告）通过；0.4.1 / 5 Debug 产物的 v2 签名仍为原测试证书。实际 Gradle 执行确认 Release 缺凭据、缺显式公网地址、指定现有测试证书或使用仓库内配置均被拒绝。本轮没有生成密钥、正式签名包或上传产物，未进行新的设备验收。
+
 默认使用 Maven Central 和 Google Maven。若 Maven Central 返回 HTTP 403，可显式使用 [GCS Maven Central 镜像](https://maven-central.storage.googleapis.com/index.html)（镜像维护方说明它不是 Google 正式支持的产品）：
 
 ```sh
@@ -51,7 +102,7 @@ cd android
 
 本地本轮构建通过该参数完成，未更改系统代理、证书信任或全局 Gradle 配置；网络恢复正常时可省略参数。
 
-构建输出为 `android/app/build/outputs/apk/debug/app-debug.apk`，本轮已生成并复制为 0.4.0 本地测试包。包名 `org.freeimpro.student`、versionCode 4、最低 API 29、目标 API 35，测试签名校验通过（APK Signature Scheme v2）。构建配置关闭 WebView 调试；这是本地测试签名，不作为应用商店发布包。正式发布还需独立的发布签名与更新管理；签名私钥不能提交 GitHub。APK、构建缓存和本地 SDK 都已忽略。
+Debug 构建输出为 `android/app/build/outputs/apk/debug/app-debug.apk`。历史 0.4.0 / versionCode 4 测试包的 v2 签名检查通过；当前源码版本为 0.4.1 / 5，最低 API 29、目标 API 35。Debug 仍为本地测试签名，不作为应用商店发布包。正式发布还需上述既定签名身份、分发与更新管理及候选真机验收；签名私钥不能提交 GitHub。APK、AAB、常见 keystore 文件、签名配置、构建缓存和本地 SDK 都已忽略。
 
 ## 测试安装与连接
 

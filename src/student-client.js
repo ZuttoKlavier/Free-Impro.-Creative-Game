@@ -29,7 +29,8 @@ export async function exportLocalFile(blob, name) {
 }
 
 // Capture inside the student application; do not launch a camera/gallery app.
-export function capturePhoto() {
+export function capturePhoto({ signal } = {}) {
+  if (signal?.aborted) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const dialog = document.createElement('dialog'); dialog.style.maxWidth = 'min(94vw, 640px)';
     dialog.innerHTML = '<h2>拍下声音的主人</h2><video autoplay muted playsinline style="width:100%;max-height:65vh;border-radius:12px"></video><p role="status">正在打开相机…</p><div class="dialog-actions"><button data-cancel class="secondary">取消</button><button data-shoot class="primary" disabled>拍照</button></div>';
@@ -38,12 +39,14 @@ export function capturePhoto() {
     const finish = (blob, error) => {
       if (done) return; done = true; stream?.getTracks().forEach(track => track.stop()); video.srcObject = null;
       document.removeEventListener('visibilitychange', visibility); window.removeEventListener('freeimpro-background', background); window.removeEventListener('pagehide', background);
+      signal?.removeEventListener('abort', background);
       dialog.close(); dialog.remove(); error ? reject(error) : resolve(blob);
     };
     const background = () => finish(null);
     const visibility = () => { if (document.hidden && !isStudentClient()) background(); };
     dialog.querySelector('[data-cancel]').onclick = () => finish(null); dialog.oncancel = () => finish(null);
     document.addEventListener('visibilitychange', visibility); window.addEventListener('freeimpro-background', background); window.addEventListener('pagehide', background);
+    signal?.addEventListener('abort', background, { once: true });
     shoot.onclick = () => {
       if (!video.videoWidth || !video.videoHeight) return;
       shoot.disabled = true; const canvas = document.createElement('canvas');

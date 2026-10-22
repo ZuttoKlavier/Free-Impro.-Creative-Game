@@ -9,7 +9,7 @@ test('student app profile captures photos internally and exports backups through
     navigator.mediaDevices.getUserMedia = async constraints => { const stream = await getMedia(constraints); window.cameraTracks = stream.getTracks(); return stream; };
   });
   try {
-    const page = await context.newPage(); await page.goto('/'); await page.locator('#classroom-tab').click(); await expect(page.locator('.auth-tabs')).toBeHidden();
+    const page = await context.newPage(); await page.goto('/'); await page.locator('#classroom-tab').click(); await page.locator('#open-my-classroom').click(); await expect(page.locator('.auth-tabs')).toBeHidden();
     await expect(page.locator('#auth-role')).toBeHidden(); await expect(page.locator('#classroom-connection')).toBeHidden();
     await page.locator('#library-tab').click(); await page.locator('#demo').click(); await page.locator('#sound-name').fill('应用内照片声音'); await page.locator('#save').click();
     await page.locator('#library-tab').click(); await page.locator('.sound-open').click(); await page.locator('.character-edit').click();

@@ -10,7 +10,7 @@ class AudioClock {
     return { numberOfChannels: channels, length, sampleRate, duration: length / sampleRate, getChannelData: channel => data[channel] };
   }
   createBufferSource() {
-    const source = { connect() {}, disconnect() {}, start(time) { this.time = time; }, stop() { this.stopped = true; } };
+    const source = { playbackRate: { value: 1 }, connect() {}, disconnect() {}, start(time, offset, duration) { Object.assign(this, { time, offset, duration }); }, stop() { this.stopped = true; } };
     this.sources.push(source);
     return source;
   }
@@ -38,27 +38,28 @@ test('sounding begins at the audio clock, not the look-ahead queue, and exposes 
     assert.deepEqual(sounding(), []);
     context.currentTime = .025;
     const notes = sounding();
-    assert.deepEqual(notes, [{ step: 0, length: 2, time: .025, duration: .3, loop: 0 }]);
+    assert.deepEqual(notes, [{ step: 0, length: 2, time: .025, duration: .2, loop: 0 }]);
     assert.equal(notes[0].source, undefined);
     assert.equal(notes[0].buffer, undefined);
     notes[0].duration = 10; notes.push({ step: 10 });
-    assert.deepEqual(sounding(), [{ step: 0, length: 2, time: .025, duration: .3, loop: 0 }]);
+    assert.deepEqual(sounding(), [{ step: 0, length: 2, time: .025, duration: .2, loop: 0 }]);
   } finally { engine.dispose(); }
 });
 
 test('a scheduled held sound remains visible after a main-thread stall without replaying missed notes', async () => {
   const triggers = [], pattern = Array(16).fill(false); pattern[0] = 4;
-  const { context, engine, sounding, advance } = await setup({ pattern, onTrigger: event => triggers.push(event) });
+  const { context, engine, sounding, advance } = await setup({ pattern, duration: .4, onTrigger: event => triggers.push(event) });
   try {
-    assert.equal(context.sources[0].buffer.duration, .6);
+    assert.equal(context.sources[0].buffer.duration, .4);
+    assert.equal(context.sources[0].duration, .4);
     advance(.25);
     assert.equal(engine.getState().step, 1);
     assert.deepEqual(triggers, []);
     assert.equal(context.sources.length, 1);
-    assert.deepEqual(sounding(), [{ step: 0, length: 4, time: .025, duration: .6, loop: 0 }]);
-    context.currentTime = .624999;
+    assert.deepEqual(sounding(), [{ step: 0, length: 4, time: .025, duration: .4, loop: 0 }]);
+    context.currentTime = .424999;
     assert.equal(sounding().length, 1);
-    context.currentTime = .625;
+    context.currentTime = .425001;
     assert.deepEqual(sounding(), []);
   } finally { engine.dispose(); }
 });
@@ -74,16 +75,19 @@ test('an ended short sound is not highlighted after a stall even if its ended ca
   } finally { engine.dispose(); }
 });
 
-test('a sounding held buffer keeps its scheduled duration when tempo changes', async () => {
+test('a sounding held buffer keeps its original prefix and scheduled cutoff when tempo changes', async () => {
   const pattern = Array(16).fill(false); pattern[0] = 4;
-  const { context, engine, sounding, advance } = await setup({ pattern });
+  const { context, engine, sounding, advance } = await setup({ pattern, duration: .8 });
   try {
     advance(.025);
     engine.setBpm(240);
     advance(.3);
     assert.equal(engine.getState().bpm, 240);
     assert.equal(context.sources[0].stopped, undefined);
-    assert.equal(context.sources[0].buffer.duration, .6);
+    assert.equal(context.sources[0].buffer.duration, .8);
+    assert.equal(context.sources[0].duration, .6);
+    assert.equal(context.sources[0].offset, 0);
+    assert.equal(context.sources[0].playbackRate.value, 1);
     assert.equal(sounding()[0].duration, .6);
     context.currentTime = .625;
     assert.deepEqual(sounding(), []);
@@ -101,27 +105,29 @@ test('cancelled future sources, ended voices and stopped playback leave no sound
     engine.setPattern('self', Array(16).fill(false));
     assert.equal(cancelled.stopped, true);
     advance(.09);
-    assert.deepEqual(sounding().map(note => note.step), [0, 1]);
-    const ended = context.sources[0];
-    ended.onended();
     assert.deepEqual(sounding().map(note => note.step), [1]);
+    const ended = context.sources.find(source => Math.abs(source.time - .0875) < 1e-9 && !source.stopped);
+    ended.onended();
+    assert.deepEqual(sounding(), []);
     engine.stop();
     assert.deepEqual(sounding(), []);
     assert.ok(context.sources.every(source => source === ended || source.stopped));
   } finally { engine.dispose(); }
 });
 
-test('single samples can overlap across loop boundaries and leaving silences every voice', async () => {
+test('single samples stop at their step boundary and cannot carry their tails into the next loop', async () => {
   const pattern = Array(16).fill(false); pattern[0] = true;
-  const { engine, sounding, advance } = await setup({ pattern, duration: 1.25, bpm: 240 });
+  const { context, engine, sounding, advance } = await setup({ pattern, duration: 1.25, bpm: 240 });
   try {
-    advance(.99);
+    advance(.03);
     assert.deepEqual(sounding().map(note => note.loop), [0]);
+    assert.equal(context.sources[0].buffer.duration, 1.25);
+    assert.equal(context.sources[0].duration, .0625);
+    advance(.99);
+    assert.deepEqual(sounding(), []);
     advance(1.03);
-    assert.deepEqual(sounding().map(note => note.loop), [0, 1]);
-    assert.ok(sounding().every(note => note.length === 1 && note.duration === 1.25));
-    advance(1.28);
     assert.deepEqual(sounding().map(note => note.loop), [1]);
+    assert.ok(sounding().every(note => note.length === 1 && note.duration === .0625));
     engine.setActive('self', false);
     assert.deepEqual(sounding(), []);
   } finally { engine.dispose(); }

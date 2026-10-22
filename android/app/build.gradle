@@ -1,9 +1,88 @@
 plugins { id 'com.android.application' }
 
 def classroomDir = rootProject.file('../data/https')
-def classroomConfig = new groovy.json.JsonSlurper().parse(new File(classroomDir, 'config.json'))
-def classroomHost = classroomConfig.preferredHost
+def publicClassroomUrl = providers.gradleProperty('classroomUrl').getOrNull()
+if (publicClassroomUrl != null && publicClassroomUrl != 'https://class.empfreeimpro.xyz/') {
+    throw new GradleException('Public classroom packages support only https://class.empfreeimpro.xyz/; other domains, ports, credentials, queries and paths are not supported.')
+}
+if (publicClassroomUrl != null && providers.gradleProperty('classroomPort').isPresent()) {
+    throw new GradleException('Do not combine classroomUrl with classroomPort; the public classroom uses HTTPS port 443.')
+}
+// Only LAN builds read the local address. Public builds retain the CA public
+// certificate for LAN fallback, without copying config.json or private keys.
+def classroomConfig = publicClassroomUrl == null ? new groovy.json.JsonSlurper().parse(new File(classroomDir, 'config.json')) : null
 def classroomPort = providers.gradleProperty('classroomPort').getOrElse('8443')
+def classroomUrl = publicClassroomUrl == null ? 'https://' + classroomConfig.preferredHost + ':' + classroomPort + '/' : publicClassroomUrl
+
+// Release credentials are deliberately separate from Gradle/project properties.
+// Never create a keystore or fall back to the debug signing identity.
+def releaseSigning = new Properties()
+def releaseSigningError = null
+def repositoryPath = rootProject.projectDir.parentFile.canonicalFile.toPath()
+def requireProtectedSigningFile = { File candidate ->
+    def path = candidate.toPath()
+    if (!candidate.isAbsolute() || !java.nio.file.Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) || candidate.canonicalFile.toPath().startsWith(repositoryPath)) {
+        throw new GradleException('Release signing files must be existing absolute files outside the repository, without symbolic links.')
+    }
+    if (java.nio.file.Files.getFileStore(path).supportsFileAttributeView('posix')) {
+        def permissions = java.nio.file.Files.getPosixFilePermissions(path)
+        if (permissions.any { it.name().startsWith('GROUP_') || it.name().startsWith('OTHERS_') }) {
+            throw new GradleException('Release signing files must be readable only by their owner; remove group/other permissions.')
+        }
+    }
+}
+def releaseSigningFile = providers.environmentVariable('FREE_IMPRO_ANDROID_RELEASE_SIGNING_FILE').getOrNull()
+if (releaseSigningFile != null) {
+    try {
+        def configFile = new File(releaseSigningFile)
+        requireProtectedSigningFile(configFile)
+        configFile.withReader('UTF-8') { releaseSigning.load(it) }
+    } catch (Exception ignored) {
+        releaseSigningError = 'Cannot read the protected external release signing configuration. Check its location and owner-only permissions.'
+    }
+} else {
+    [storeFile: 'STORE_FILE', storePassword: 'STORE_PASSWORD', keyAlias: 'KEY_ALIAS', keyPassword: 'KEY_PASSWORD', certificateSha256: 'CERTIFICATE_SHA256', storeType: 'STORE_TYPE'].each { key, suffix ->
+        def value = providers.environmentVariable('FREE_IMPRO_ANDROID_RELEASE_' + suffix).getOrNull()
+        if (value != null) releaseSigning.setProperty(key, value)
+    }
+}
+def releaseKeystore = releaseSigning.getProperty('storeFile') ? new File(releaseSigning.getProperty('storeFile')) : null
+def releaseStoreType = releaseSigning.getProperty('storeType', 'JKS')
+def knownTestCertificateSha256 = '84801f20ef2ba34e57acd0a710c1f1aec990b564d9de0c3a423cf61a655157e5'
+def verifyReleaseSigning = tasks.register('verifyReleaseSigning') {
+    group = 'verification'
+    description = 'Verify an existing protected release key and expected certificate without creating credentials.'
+    notCompatibleWithConfigurationCache('Release signing credentials must stay in the protected external configuration, not the configuration cache.')
+    doLast {
+        if (publicClassroomUrl != 'https://class.empfreeimpro.xyz/') throw new GradleException('Release builds require the explicit -PclassroomUrl=https://class.empfreeimpro.xyz/ address.')
+        if (releaseSigningError != null) throw new GradleException(releaseSigningError)
+        if (['storeFile', 'storePassword', 'keyAlias', 'keyPassword', 'certificateSha256'].any { !releaseSigning.getProperty(it)?.trim() }) {
+            throw new GradleException('Release signing is not configured. Supply the protected external signing file or all required FREE_IMPRO_ANDROID_RELEASE_* environment variables; debug signing is never used for release.')
+        }
+        def expected = releaseSigning.getProperty('certificateSha256').replaceAll('[:\\s]', '').toLowerCase(java.util.Locale.ROOT)
+        if (!(expected ==~ /[a-f0-9]{64}/)) throw new GradleException('The expected release certificate SHA-256 must contain exactly 64 hexadecimal digits.')
+        if (expected == knownTestCertificateSha256) throw new GradleException('The existing test certificate cannot be used for a release build.')
+        requireProtectedSigningFile(releaseKeystore)
+        try {
+            def keyStore = java.security.KeyStore.getInstance(releaseStoreType)
+            releaseKeystore.withInputStream { keyStore.load(it, releaseSigning.getProperty('storePassword').toCharArray()) }
+            def alias = releaseSigning.getProperty('keyAlias')
+            def certificate = keyStore.getCertificate(alias)
+            if (!(certificate instanceof java.security.cert.X509Certificate) || !keyStore.isKeyEntry(alias)) throw new IllegalArgumentException()
+            certificate.checkValidity()
+            def actual = java.security.MessageDigest.getInstance('SHA-256').digest(certificate.encoded).encodeHex().toString()
+            def debugName = new javax.naming.ldap.LdapName(certificate.subjectX500Principal.name).rdns.any { it.type.equalsIgnoreCase('CN') && it.value.toString().equalsIgnoreCase('Android Debug') }
+            if (actual == knownTestCertificateSha256 || debugName || alias.equalsIgnoreCase('androiddebugkey')) throw new GradleException('Debug/test certificates cannot be used for a release build.')
+            if (actual != expected) throw new GradleException('Release certificate SHA-256 does not match the independently verified expected identity.')
+            if (!(keyStore.getKey(alias, releaseSigning.getProperty('keyPassword').toCharArray()) instanceof java.security.PrivateKey)) throw new IllegalArgumentException()
+        } catch (GradleException failure) {
+            throw failure
+        } catch (Exception ignored) {
+            throw new GradleException('Cannot validate the existing release key. Check the keystore type, credentials, alias and certificate validity; no signing identity was created or changed.')
+        }
+        logger.lifecycle('Existing release signing identity verified; no upload performed.')
+    }
+}
 def generatedResources = layout.buildDirectory.dir('generated/classroom-res')
 tasks.register('prepareClassroomCertificate', Copy) {
     from new File(classroomDir, 'classroom-ca.crt')
@@ -18,17 +97,33 @@ android {
         applicationId 'org.freeimpro.student'
         minSdk 29
         targetSdk 35
-        versionCode 4
-        versionName '0.4.0'
+        versionCode 5
+        versionName '0.4.1'
         testInstrumentationRunner 'org.freeimpro.student.FirstSetupInstrumentation'
-        buildConfigField 'String', 'CLASSROOM_URL', '"https://' + classroomHost + ':' + classroomPort + '/"'
+        buildConfigField 'String', 'CLASSROOM_URL', '"' + classroomUrl + '"'
     }
     buildFeatures { buildConfig true }
     sourceSets.main.res.srcDir generatedResources
-    buildTypes { debug { debuggable false }; release { minifyEnabled false } }
+    signingConfigs {
+        release {
+            storeFile releaseKeystore
+            storePassword releaseSigning.getProperty('storePassword')
+            keyAlias releaseSigning.getProperty('keyAlias')
+            keyPassword releaseSigning.getProperty('keyPassword')
+            storeType releaseStoreType
+        }
+    }
+    buildTypes {
+        debug { debuggable false }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 tasks.named('preBuild').configure { dependsOn 'prepareClassroomCertificate' }
+tasks.matching { it.name in ['preReleaseBuild', 'validateSigningRelease', 'assembleRelease', 'bundleRelease', 'packageRelease', 'signReleaseBundle'] }.configureEach { dependsOn verifyReleaseSigning }
 dependencies {
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
     implementation 'com.google.zxing:core:3.5.4'

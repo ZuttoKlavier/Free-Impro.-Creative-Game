@@ -1,5 +1,6 @@
 // The Android bridge exposes classroom actions and one explicitly shared file.
-// It has no open-URL, filesystem-path, intent-launch or network-request method.
+// It has no general open-URL, filesystem-path, intent-launch or network-request
+// method. Student social authorization uses a fixed native-owned browser flow.
 export function installAndroidStudentBridge() {
   const native = window.FreeImproAndroid;
   if (!native || !navigator.userAgent.includes('FreeImproStudent/') || window.__androidStudentBridgeInstalled) return;
@@ -38,6 +39,7 @@ export function installAndroidStudentBridge() {
       if (!code) return;
       if (!/^[0-9]{6}$/.test(code)) throw new Error('这不是有效课堂码。');
       for (const input of document.querySelectorAll('#auth-password, #class-code')) { input.value = code; input.dispatchEvent(new Event('input', { bubbles: true })); }
+      window.dispatchEvent(new Event('freeimpro-open-classroom'));
       status.textContent = '课堂码已填写，请确认姓名后连接课堂。';
     } catch (error) { status.textContent = error.message || '扫码失败，可以手动填写课堂码。'; }
     finally { scan.disabled = false; }

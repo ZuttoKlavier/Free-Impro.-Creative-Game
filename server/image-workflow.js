@@ -28,9 +28,9 @@ export function createImageWorkflow(db, now = Date.now) {
     if (!user || user.role !== 'student') return { mode: 'chatgpt-web', configured: false, registered: false };
     const profile = one('SELECT * FROM student_profiles WHERE student_id=?', user.id), day = imageDay(now());
     const room = one('SELECT class_id FROM members WHERE student_id=? AND admitted=1 ORDER BY joined_at DESC LIMIT 1', user.id);
-    const pending = one("SELECT id FROM image_jobs WHERE student_id=? AND status IN ('pending','processing')", user.id);
+    const pending = one("SELECT id,status FROM image_jobs WHERE student_id=? AND status IN ('pending','processing')", user.id);
     const used = one('SELECT id FROM image_jobs WHERE student_id=? AND (day=? OR completed_day=?)', user.id, day, day);
-    return { mode: 'chatgpt-web', configured: Boolean(profile && room), registered: Boolean(profile), userId: user.id, name: user.name, classId: room?.class_id, hasAvatar: Boolean(profile?.avatar), remaining: used ? 0 : 1, pendingJobId: pending?.id, day };
+    return { mode: 'chatgpt-web', configured: Boolean(profile && room), registered: Boolean(profile), userId: user.id, name: user.name, classId: room?.class_id, hasAvatar: Boolean(profile?.avatar), remaining: used ? 0 : 1, pendingJobId: pending?.id, pendingStatus: pending?.status, day };
   }
   function register(user) {
     student(user);

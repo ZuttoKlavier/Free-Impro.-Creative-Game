@@ -7,7 +7,7 @@
 | 15 秒录音、波形、拖动裁剪 | [WaveSurfer.js](https://github.com/katspaugh/wavesurfer.js)，Record / Regions，BSD-3-Clause | 优先试接波形与选区。仍需保留长按释放、0.5 秒过滤、1 秒采样上限及麦克风后台释放规则；不负责自动识别敲击或导出裁剪后的 WAV。 |
 | 多次敲击自动切片 | [Essentia.js](https://github.com/MTG/essentia.js)，AGPL-3.0 | 音频分析候选，需进一步验证起音检测接口、噪声下准确度及许可证适配；暂保留 src/audio.js 的能量检测。其 README 明示部分算法与兼容性仍需验证，不能直接当成熟切片成品。 |
 | 循环、速度、Swing、多声部调度 | [Tone.js](https://github.com/Tonejs/Tone.js)，MIT | 优先验证 Transport 替代 src/sequencer.js 部分调度。完整 loop 边界加入、教师审批、即时退出仍由本项目实现；保留现有圆点和水滴 UI。 |
-| 拉长声音但保持音高 | [SoundTouchJS](https://github.com/cutterbl/SoundTouchJS) | 优先与 src/time-stretch.js 做试听对比。当前 README 标注 MPL-2.0，旧版许可和 API 不同，必须核对选定版本。无法保证任意拉伸完全不改变音色；短敲击需听感验收。 |
+| 时间拉伸（历史评估，当前不采用） | [SoundTouchJS](https://github.com/cutterbl/SoundTouchJS) | 2026-10-19 用户确认原声规则：录音按原速播放，时值较长时留空，较短时只播放开头。已移除节奏拉伸处理，此候选库不再用于当前需求。 |
 | 照片主体裁切 | [Cropper.js](https://github.com/fengyuanchen/cropperjs)，MIT | 可复用触控裁剪交互；不会自动分割主体，也不会生成动漫图。先保留已有拍照权限和作品绑定。 |
 | 动漫形象生成 | 现有 server/images.js 的 OpenAI 图像服务适配器 | 按已选服务继续；不把裁剪库或动画播放器误作生成模型。本次未重新验证模型配置与真实生成效果。 |
 | 角色统一动作 | [lottie-web](https://github.com/airbnb/lottie-web)，MIT | 适合播放预制矢量动画，不会把每张生成图片自动变成可动角色。现阶段统一缩放/摆动可继续 CSS 实现。 |
@@ -20,7 +20,7 @@
 ## 优先顺序
 
 1. WaveSurfer：先验证长按录音结束后的波形选区，确保不丢现有裁剪体验。
-2. SoundTouchJS：用杯子敲击、拍手、人声，对比 1×/2×/4× 时长的音高、瞬态及手机耗时，再决定替换。
+2. SoundTouchJS：时间拉伸候选已按 2026-10-19 的原声要求停用；当前只验证原声前缀与剩余静音，不再评估拉伸替换。
 3. Tone.js：回归完整 loop 边界、Swing、BPM 实时调整和 50 轨播放，验证通过才接管调度。
 4. Socket.IO：先改通知，保留已有 HTTP 提交与 SQLite 数据，再验证断线恢复和 15/50 人课堂。
 

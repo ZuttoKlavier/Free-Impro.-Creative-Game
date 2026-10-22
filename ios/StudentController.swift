@@ -1,12 +1,13 @@
 import UIKit
 import WebKit
-import Security
-import CryptoKit
+import AVFAudio
 
 final class StudentController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply {
     private var web: WKWebView!
     private var localOrigin: StudentPolicy?
     private let classroom = ClassroomConnection()
+    private lazy var socialAuth = StudentSocialAuth(classroom: classroom, presenter: self)
+    private let audio = StudentAudio()
     private var files: LocalFiles?
     private var filePicker: ControlledFilePicker?
     private var boot = 0
@@ -15,18 +16,28 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private var loadingLocalDocument = false
     private let status = UILabel()
     private let launchCover = UIView()
-    private let credential: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "org.freeimpro.student.admin", kSecAttrAccount as String: "manager"]
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        UIDevice.current.userInterfaceIdiom == .pad ? .landscape : .allButUpsideDown
+    }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        UIDevice.current.userInterfaceIdiom == .pad ? .landscapeRight : .portrait
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad(); view.backgroundColor = .white; overrideUserInterfaceStyle = .light
         navigationController?.setNavigationBarHidden(true, animated: false)
         let config = WKWebViewConfiguration(); config.allowsInlineMediaPlayback = true
+        config.mediaTypesRequiringUserActionForPlayback = []
         config.applicationNameForUserAgent = "FreeImproStudent/1 iOS"
         config.userContentController.addScriptMessageHandler(self, contentWorld: .page, name: "localFiles")
         if let path = Bundle.main.url(forResource: "Bridge", withExtension: "js"), let js = try? String(contentsOf: path, encoding: .utf8) {
             config.userContentController.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
         web = WKWebView(frame: .zero, configuration: config); web.navigationDelegate = self; web.uiDelegate = self; web.isInspectable = false; web.isOpaque = false; web.backgroundColor = .white
+        audio.onPlaybackEnded = { [weak self] id in self?.audioEvent("freeimpro-audio-ended", id: id) }
+        audio.onRecordingEnded = { [weak self] id in self?.audioEvent("freeimpro-recording-ended", id: id) }
+        classroom.onDisconnect = { [weak self] in self?.socialAuth.cancel(message: "课堂连接已关闭，请重新登录。") }
         web.scrollView.pinchGestureRecognizer?.isEnabled = false
         web.scrollView.alwaysBounceVertical = true
         web.scrollView.panGestureRecognizer.addTarget(self, action: #selector(failurePull(_:)))
@@ -44,17 +55,15 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
         do { let storage = try LocalFiles(); files = storage; filePicker = ControlledFilePicker(presenter: self, files: storage) } catch { /* File operations report a local error when requested. */ }
         NotificationCenter.default.addObserver(self, selector: #selector(background), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(foreground), name: UIApplication.didBecomeActiveNotification, object: nil)
-        // Pin local storage to the previous app origin once; service settings
-        // never move the sound library. No request is sent to this origin.
+        // Preserve the previous offline storage origin. Its legacy address is
+        // never used for classroom requests, which always use the public service.
         #if targetEnvironment(simulator)
         let previousOrigin = bundledAddress
         #else
         let previousOrigin = UserDefaults.standard.string(forKey: "classroom") ?? bundledAddress
         #endif
-        let address = UserDefaults.standard.string(forKey: "localOrigin") ?? previousOrigin ?? "https://localhost:8443/"
-        localOrigin = StudentPolicy(address)
-        UserDefaults.standard.set(localOrigin?.origin.absoluteString, forKey: "localOrigin")
-        classroom.configure(UserDefaults.standard.string(forKey: "classroom") ?? bundledAddress)
+        localOrigin = StudentPolicy.preservedLocalOrigin(in: .standard, legacyAddress: previousOrigin)
+        classroom.configure()
         if UserDefaults.standard.bool(forKey: "offlineShellPrepared") { loadLocalApp() }
         else {
             // Retire the old downloaded shell without touching IndexedDB works
@@ -73,62 +82,10 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["url"]
         #endif
     }
-    private func storedCode() -> String? {
-        var query = credential; query[kSecReturnData as String] = true; query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?; guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-    private func hash(_ code: String, salt: String) -> String { SHA256.hash(data: Data((salt + ":" + code).utf8)).map { String(format: "%02x", $0) }.joined() }
-    private func storeCode(_ code: String) -> OSStatus {
-        let salt = UUID().uuidString, data = Data((salt + ":" + hash(code, salt: salt)).utf8)
-        var values = credential; values[kSecValueData as String] = data; values[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        return SecItemAdd(values as CFDictionary, nil)
-    }
-    @objc private func settings() {
-        if UserDefaults.standard.double(forKey: "lockedUntil") > Date().timeIntervalSince1970 { message("管理码尝试过多，请一分钟后重试。"); return }
-        if let saved = storedCode() {
-            let alert = UIAlertController(title: "教师管理码", message: "修改连接前需验证管理码。", preferredStyle: .alert)
-            alert.addTextField { $0.isSecureTextEntry = true; $0.keyboardType = .numberPad }
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-            alert.addAction(UIAlertAction(title: "验证", style: .default) { [weak self, weak alert] _ in
-                guard let self, let code = alert?.textFields?.first?.text else { return }
-                let fields = saved.split(separator: ":").map(String.init)
-                if fields.count == 2 && self.hash(code, salt: fields[0]) == fields[1] {
-                    UserDefaults.standard.set(0, forKey: "attempts"); self.configure(first: false)
-                } else {
-                    let count = UserDefaults.standard.integer(forKey: "attempts") + 1
-                    UserDefaults.standard.set(count >= 5 ? 0 : count, forKey: "attempts")
-                    if count >= 5 { UserDefaults.standard.set(Date().timeIntervalSince1970 + 60, forKey: "lockedUntil") }
-                    self.message("管理码不正确。")
-                }
-            }); present(alert, animated: true)
-        } else { configure(first: true) }
-    }
-    private func configure(first: Bool) {
-        let alert = UIAlertController(title: "课堂连接", message: "设置教师电脑 HTTPS 地址。学生加入课堂时才连接，本地作品不受地址修改影响。", preferredStyle: .alert)
-        let defaultURL = Bundle.main.url(forResource: "classroom", withExtension: "json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }?["url"] ?? ""
-        alert.addTextField { $0.text = UserDefaults.standard.string(forKey: "classroom") ?? defaultURL; $0.keyboardType = .URL; $0.autocapitalizationType = .none }
-        if first { for placeholder in ["设置 6–12 位数字管理码", "再次输入管理码"] { alert.addTextField { $0.placeholder = placeholder; $0.isSecureTextEntry = true; $0.keyboardType = .numberPad } } }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "连接", style: .default) { [weak self, weak alert] _ in
-            guard let self, let fields = alert?.textFields, let text = fields.first?.text, let selected = StudentPolicy(text) else { self?.message("请填写有效 HTTPS 地址，例如 https://192.168.1.20:8443/"); return }
-            if first {
-                let code = fields[1].text ?? ""
-                guard code.range(of: "^[0-9]{6,12}$", options: .regularExpression) != nil else { self.message("管理码必须是 6–12 位数字。"); return }
-                guard code == fields[2].text else { self.message("两次输入的管理码不一致，请重新输入。"); return }
-                let result = self.storeCode(code)
-                guard result == errSecSuccess else {
-                    if result == errSecMissingEntitlement { self.message("应用缺少钥匙串签名权限，请安装通过 Xcode 正常签名构建的版本。你的管理码输入没有问题。") }
-                    else { self.message("管理码无法保存到系统钥匙串（错误 \(result)），请保留此错误码以便排查。") }
-                    return
-                }
-            }
-            UserDefaults.standard.set(selected.origin.absoluteString, forKey: "classroom"); self.classroom.configure(selected.origin.absoluteString)
-            self.web.evaluateJavaScript("window.FreeImproClassroom.connected = false; window.FreeImproClassroom.generation++; window.dispatchEvent(new Event('freeimpro-classroom-disconnected'))", completionHandler: nil)
-        }); present(alert, animated: true)
-    }
     private func loadLocalApp() {
         boot += 1; let ticket = boot
+        socialAuth.cancel()
+        audio.reset()
         filePicker?.resetForDocument(); files?.schedule { $0.resetForDocument() }
         web.stopLoading(); connectionFailed = false; failurePullReady = false; status.text = nil; launchCover.isHidden = false
         let rulesJSON = "[{\"trigger\":{\"url-filter\":\"^https?://\"},\"action\":{\"type\":\"block\"}}]"
@@ -156,11 +113,33 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
     }
     @objc private func reconnect() { loadLocalApp() }
     @objc private func background() {
+        socialAuth.cancel(message: "登录已暂停，请回到应用后重新登录。")
+        audio.reset()
         web?.evaluateJavaScript("window.dispatchEvent(new Event('freeimpro-background'))", completionHandler: nil)
         web?.setAllMediaPlaybackSuspended(true); web?.setMicrophoneCaptureState(.none); web?.setCameraCaptureState(.none); files?.schedule { $0.cancelAll() }
     }
     @objc private func foreground() { web?.setAllMediaPlaybackSuspended(false) }
-    private func message(_ text: String) { let alert = UIAlertController(title: "声音课堂", message: text, preferredStyle: .alert); alert.addAction(UIAlertAction(title: "知道了", style: .default)); present(alert, animated: true) }
+    private func audioEvent(_ name: String, id: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["id": id]), let detail = String(data: data, encoding: .utf8) else { return }
+        web?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('\(name)', { detail: \(detail) }))", completionHandler: nil)
+    }
+    private func prepareAudioSession(_ type: String) throws {
+        let session = AVAudioSession.sharedInstance()
+        switch type {
+        case "play-and-record":
+            guard UIApplication.shared.applicationState == .active else {
+                throw NSError(domain: "FreeImpro", code: 2, userInfo: [NSLocalizedDescriptionKey: "请回到应用后重新录音。"])
+            }
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        case "playback":
+            try session.setCategory(.playback, mode: .default)
+        default:
+            throw NSError(domain: "FreeImpro", code: 3, userInfo: [NSLocalizedDescriptionKey: "音频模式无效。"])
+        }
+        // Background cleanup may restore the category, but must not reactivate
+        // audio after the app has stopped its media and microphone capture.
+        if UIApplication.shared.applicationState == .active { try session.setActive(true) }
+    }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard loadingLocalDocument, action.navigationType == .other, action.targetFrame?.isMainFrame == true, let url = action.request.url, localOrigin?.navigation(url) == true else { decisionHandler(.cancel); return }
         decisionHandler(.allow)
@@ -214,9 +193,39 @@ final class StudentController: UIViewController, WKNavigationDelegate, WKUIDeleg
         alert.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in completionHandler(false) }); alert.addAction(UIAlertAction(title: "确认", style: .default) { _ in completionHandler(true) }); present(alert, animated: true)
     }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
-        guard message.frameInfo.isMainFrame, let url = message.frameInfo.request.url, localOrigin?.navigation(url) == true, let body = message.body as? [String: Any], let action = body["action"] as? String else { replyHandler(nil, "应用接口不可用。"); return }
+        let origin = message.frameInfo.securityOrigin
+        guard message.webView === web, message.frameInfo.isMainFrame,
+              origin.protocol == "https", origin.host == localOrigin?.origin.host,
+              (origin.port == 0 ? 443 : origin.port) == (localOrigin?.origin.port ?? 443),
+              let url = message.frameInfo.request.url, localOrigin?.navigation(url) == true,
+              let body = message.body as? [String: Any], let action = body["action"] as? String else { replyHandler(nil, "应用接口不可用。"); return }
         switch action {
-        case "settings": settings(); replyHandler(true, nil); return
+        case "student-social-login":
+            socialAuth.signIn(provider: body["provider"] as? String ?? "", mode: body["mode"] as? String ?? "", reply: replyHandler); return
+        case "audio-record-start": audio.start(id: body["id"] as? String ?? "", completion: replyHandler); return
+        case "audio-record-level":
+            let level = audio.level()
+            replyHandler(level["id"] as? String == body["id"] as? String ? level : ["active": false], nil); return
+        case "audio-record-stop":
+            do { replyHandler(try audio.stop(id: body["id"] as? String ?? "") ?? NSNull(), nil) }
+            catch { replyHandler(nil, error.localizedDescription) }; return
+        case "audio-record-cancel": audio.cancel(id: body["id"] as? String ?? ""); replyHandler(true, nil); return
+        case "audio-play":
+            do { replyHandler(try audio.play(id: body["id"] as? String ?? "", encoded: body["encoded"] as? String ?? "", mime: body["mime"] as? String ?? ""), nil) }
+            catch { replyHandler(nil, error.localizedDescription) }; return
+        case "audio-play-stop": audio.stopPlayback(id: body["id"] as? String ?? ""); replyHandler(true, nil); return
+        case "audio-rhythm-play":
+            do { replyHandler(try audio.playRhythm(id: body["id"] as? String ?? "", encoded: body["encoded"] as? String ?? "", bars: body["bars"] as? Int ?? 0, bpm: body["bpm"] as? Double ?? 0, revision: body["revision"] as? Int ?? 0), nil) }
+            catch { replyHandler(nil, error.localizedDescription) }; return
+        case "audio-rhythm-queue":
+            do { replyHandler(try audio.queueRhythm(id: body["id"] as? String ?? "", encoded: body["encoded"] as? String ?? "", bars: body["bars"] as? Int ?? 0, bpm: body["bpm"] as? Double ?? 0, revision: body["revision"] as? Int ?? 0), nil) }
+            catch { replyHandler(nil, error.localizedDescription) }; return
+        case "audio-rhythm-state": replyHandler(audio.rhythmState(id: body["id"] as? String ?? ""), nil); return
+        case "audio-diagnostics": replyHandler(audio.diagnostics(), nil); return
+        case "audio-session":
+            do { try prepareAudioSession(body["type"] as? String ?? ""); replyHandler(true, nil) }
+            catch { replyHandler(nil, "音频暂时无法使用：\(error.localizedDescription)") }
+            return
         case "reconnect": reconnect(); replyHandler(true, nil); return
         case "classroom-request": classroom.request(body, cookieStore: web.configuration.websiteDataStore.httpCookieStore, reply: replyHandler); return
         case "cancel-request": if let id = body["id"] as? String { classroom.cancel(id) }; replyHandler(true, nil); return

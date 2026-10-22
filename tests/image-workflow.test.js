@@ -39,6 +39,8 @@ test('guest exclusion, atomic daily allowance, idempotence and private reference
   const requests = await Promise.all([student('/image-jobs', a), student('/image-jobs', b)]);
   assert.deepEqual(requests.map(r => r.status).sort(), [201, 429]);
   const accepted = requests[0].status === 201 ? a : b;
+  const queued = (await student('/image-status')).data;
+  assert.equal(queued.pendingJobId, accepted.requestId); assert.equal(queued.pendingStatus, 'pending');
   assert.equal((await student('/image-jobs', accepted)).status, 201);
   assert.equal((await student('/image-jobs', { ...accepted, kind: 'work', workId: randomUUID(), workName: 'changed' })).status, 409);
   assert.equal((await student('/image-jobs/' + accepted.requestId + '/photo')).status, 403);
@@ -74,12 +76,14 @@ test('fixed identity and work share Beijing calendar quota; late returns never d
   assert.equal(context.conversationUrl, binding.conversationUrl, 'Work images reuse the fixed identity conversation');
   assert.equal(context.project.url, IMAGE_PROJECT.url);
   const claimId = randomUUID(); assert.equal((await teacher('/image-jobs/' + work.requestId + '/claim', { claimId })).status, 200);
+  assert.equal((await student('/image-status')).data.pendingStatus, 'processing');
   assert.equal((await teacher('/image-jobs/' + work.requestId + '/claim', { claimId })).data.job.repeated, true);
   assert.equal((await teacher('/image-jobs/' + work.requestId + '/claim', { claimId: randomUUID() })).status, 409);
   assert.equal((await teacher('/image-jobs/' + work.requestId + '/complete', { image, claimId: randomUUID() })).status, 409);
   now += 86400000;
   assert.equal((await student('/image-jobs', payload('work'))).status, 409, 'An uncompleted request is never re-generated automatically');
   assert.equal((await teacher('/image-jobs/' + work.requestId + '/complete', { image, claimId })).status, 200);
+  assert.equal((await student('/image-status')).data.pendingStatus, undefined);
   assert.equal((await student('/image-jobs', payload('work'))).status, 429, 'Delivery today consumes today too');
   assert.equal((await student('/image-jobs/' + work.requestId + '/result')).status, 200);
 });
