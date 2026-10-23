@@ -242,6 +242,15 @@ function Stop-PrivateService {
 }
 function Start-ExistingHttps($ProtectedConfig) {
     Assert-ProtectedConfig $ProtectedConfig
+    # WinSW reports Running before its Node child necessarily binds the socket.
+    # Wait for the private backend before checking listener ownership or starting HTTPS.
+    $backendDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    do {
+        $backend = Probe '/api/health'
+        if ($backend.status -eq 200 -and $backend.healthy) { break }
+        Start-Sleep -Seconds 1
+    } while ([DateTime]::UtcNow -lt $backendDeadline)
+    if ($backend.status -ne 200 -or -not $backend.healthy) { throw 'Backend did not become ready before HTTPS restart.' }
     [void](Assert-Service $true $false)
     $https = Get-CimInstance Win32_Service -Filter "Name='EmpvcHttps'"
     if ($https.State -eq 'Stopped') {
