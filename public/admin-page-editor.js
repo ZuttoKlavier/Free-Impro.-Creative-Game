@@ -10,7 +10,7 @@ export function createPageEditor({ root, api, onUnauthorized }) {
   const state = { page: 'student', target: 'page', device: 'phone', editing: false, ready: false, active: false, loaded: false, loading: false, saving: false, destroyed: false, conflict: false, revision: 0, saved: emptyDesign(), draft: emptyDesign(), values: {}, available: true, invalid: new Set(), frame: null, retry: null, timeout: null, previewPages: null, readOnlyPreview: false };
   const wrapper = node('div', undefined, 'ui-editor');
   wrapper.innerHTML = `
-    <div class="ui-editor-intro"><div><strong>在真实页面中调整外观</strong><p>未保存的修改仅在此预览。保存后，此服务器上的所有用户都会使用新外观。</p></div><span class="ui-editor-badge" id="ui-editor-dirty">已保存</span></div>
+    <div class="ui-editor-intro"><div><strong>在真实页面中编辑文字与外观</strong><p>未保存的修改仅在此预览。保存后学生与教师网页刷新生效；手机安装包需要更新至支持文字编辑的版本。</p></div><span class="ui-editor-badge" id="ui-editor-dirty">已保存</span></div>
     <div class="ui-editor-toolbar">
       <label>编辑页面<select id="ui-editor-page" aria-label="编辑页面"></select></label>
       <label>预览尺寸<select id="ui-editor-device" aria-label="预览尺寸"></select></label>
@@ -39,7 +39,7 @@ export function createPageEditor({ root, api, onUnauthorized }) {
     const changed = dirty();
     get('ui-editor-dirty').textContent = changed ? '有未保存修改' : '已保存';
     get('ui-editor-dirty').classList.toggle('is-dirty', changed);
-    get('ui-editor-save-state').textContent = state.saving ? '正在保存…' : state.conflict ? '需要载入服务器版本后再保存' : state.invalid.size ? '请修正输入的数值' : changed ? '草稿已变更，保存后对所有用户生效' : '当前外观已保存';
+    get('ui-editor-save-state').textContent = state.saving ? '正在保存…' : state.conflict ? '需要载入服务器版本后再保存' : state.invalid.size ? '请修正输入的内容' : changed ? '草稿已变更，保存后对所有用户生效' : '当前页面设置已保存';
     get('ui-editor-save').textContent = state.saving ? '正在保存…' : '保存并应用';
     get('ui-editor-save').disabled = !changed || state.saving || state.loading || !state.loaded || state.conflict || !!state.invalid.size;
     get('ui-editor-discard').disabled = !changed || state.saving || state.loading;
@@ -77,7 +77,16 @@ export function createPageEditor({ root, api, onUnauthorized }) {
       const heading = node('div', undefined, 'ui-editor-property-heading'); const label = node('label', spec.label + (spec.unit ? `（${spec.unit}）` : '')); label.htmlFor = 'ui-property-' + name;
       const clear = button('默认', () => { setProperty(name, undefined); renderControls(); }, 'ui-editor-property-clear'); clear.setAttribute('aria-label', `恢复${spec.label}默认`); clear.disabled = !custom;
       heading.append(label, clear); row.append(heading);
-      if (spec.type === 'color') {
+      if (spec.type === 'text') {
+        const input = node('textarea'); input.id = 'ui-property-' + name; input.rows = 3; input.maxLength = spec.maxLength;
+        input.value = custom ? styles[name] : typeof inherited === 'string' ? inherited : '';
+        const hint = node('span', `最多 ${spec.maxLength} 字，支持换行。恢复默认可撤销这项文字修改。`, 'ui-editor-hint');
+        input.addEventListener('input', () => {
+          if (input.value.length > spec.maxLength) { state.invalid.add(name); updateActions(); return; }
+          setProperty(name, input.value); row.classList.add('is-modified'); clear.disabled = false;
+        });
+        row.append(input, hint);
+      } else if (spec.type === 'color') {
         const inputs = node('div', undefined, 'ui-editor-color'); const input = node('input'); input.type = 'color'; input.id = 'ui-property-' + name; input.value = custom ? styles[name] : /^#[0-9a-f]{6}$/i.test(inherited || '') ? inherited : '#ffffff';
         const value = node('span', custom ? styles[name] : inherited || '跟随默认样式');
         input.addEventListener('input', () => { setProperty(name, input.value); value.textContent = input.value; row.classList.add('is-modified'); clear.disabled = false; });
@@ -183,7 +192,7 @@ export function createPageEditor({ root, api, onUnauthorized }) {
     try {
       const design = validateDesign(state.draft); const result = await api('/ui-design', { revision: state.revision, design }); if (state.destroyed) return;
       state.saved = validateDesign(result.design || design); state.draft = copy(state.saved); state.revision = result.revision; state.conflict = false;
-      get('ui-editor-updated').textContent = '最近保存：' + new Date(result.updatedAt || Date.now()).toLocaleString('zh-CN'); announce('页面外观已保存并应用。学生端和教师端刷新后会使用新外观。', 'success'); renderControls(); push();
+      get('ui-editor-updated').textContent = '最近保存：' + new Date(result.updatedAt || Date.now()).toLocaleString('zh-CN'); announce('页面文字与外观已保存并应用。学生与教师网页刷新后生效；旧安装包需更新。', 'success'); renderControls(); push();
     } catch (error) { if (state.destroyed) return; if (error.status === 409) { state.conflict = true; announce('保存未完成：服务器已有新的页面设置，你的未保存草稿已保留。', 'error'); } else announce(error.message || '保存未完成，草稿已保留，请重试。', 'error'); }
     finally { if (!state.destroyed) { state.saving = false; updateActions(); } }
   }

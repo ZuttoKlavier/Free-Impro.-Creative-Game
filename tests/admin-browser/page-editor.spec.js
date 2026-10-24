@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const headers = { Origin: 'http://127.0.0.1:4307' };
 const empty = () => ({ version: 1, pages: { student: {}, teacher: {} } });
-async function snapshot(page) { const response = await page.request.get('/api/ui-design'); expect(response.ok()).toBe(true); return response.json(); }
+async function snapshot(page) { const response = await page.request.get('/api/ui-design', { headers: { 'X-FreeImpro-UI-Text': '1' } }); expect(response.ok()).toBe(true); return response.json(); }
 async function publish(page, design) {
   const current = await snapshot(page);
   const response = await page.request.post('/api/admin/ui-design', { headers, data: { revision: current.revision, design } });
@@ -127,4 +127,52 @@ test('版本冲突保留草稿，重新载入后可继续；会话撤销后禁�
   await expect(page.locator('#login-screen')).toBeVisible();
   await expect(page.locator('#ui-editor-frame')).toHaveCount(0);
   expect((await snapshot(page)).design).toEqual(other);
+});
+
+test('文字可逐项点选、预览、保存、重新载入与恢复，保留导航图标和数量且不执行 HTML', async ({ page, browser }) => {
+  const frame = await openEditor(page);
+  await page.locator('#ui-editor-mode').click();
+  await page.locator('#ui-editor-frame').scrollIntoViewIfNeeded();
+  await frame.locator('#classroom-tab > span').click();
+  await expect(page.locator('#ui-editor-target')).toHaveValue('myLabel');
+  await expect(page.locator('#ui-property-text')).toHaveValue('我的');
+  await page.locator('#ui-property-text').fill('个人中心');
+  await expect(frame.locator('#classroom-tab > span')).toHaveText('个人中心');
+  await expect(frame.locator('#classroom-tab > svg')).toHaveCount(1);
+  await page.locator('#ui-editor-target').selectOption('libraryLabel');
+  await page.locator('#ui-property-text').fill('声音收藏');
+  await expect(frame.locator('#library-count')).toHaveText('0');
+  await expect(frame.locator('#library-tab > svg')).toHaveCount(1);
+  expect((await snapshot(page)).design).toEqual(empty());
+  await save(page);
+
+  await page.locator('#ui-editor-page').selectOption('teacher');
+  await expect(page.locator('#ui-editor-mode')).toBeEnabled(); await page.locator('#ui-editor-mode').click();
+  await page.locator('#ui-editor-frame').scrollIntoViewIfNeeded();
+  await frame.locator('.intro h1').click();
+  await expect(page.locator('#ui-property-text')).toBeVisible();
+  const literal = '<img src=x onerror="alert(1)">\n一起聆听';
+  await page.locator('#ui-property-text').fill(literal);
+  await expect(frame.locator('.intro h1')).toHaveText(literal);
+  await expect(frame.locator('.intro h1 img')).toHaveCount(0);
+  await save(page);
+  await page.locator('#ui-editor-reload').click();
+  await expect(page.locator('#ui-property-text')).toHaveValue(literal);
+
+  const guest = await browser.newContext();
+  try {
+    const visitor = await guest.newPage(); await visitor.goto('http://127.0.0.1:4307/teacher.html');
+    await expect(visitor.locator('.intro h1')).toHaveText(literal);
+    await expect(visitor.locator('.intro h1 img')).toHaveCount(0);
+    await visitor.goto('http://127.0.0.1:4307/');
+    await expect(visitor.locator('#classroom-tab > span')).toHaveText('个人中心');
+    await expect(visitor.locator('#library-count')).toHaveText('0');
+  } finally { await guest.close(); }
+
+  await page.locator('#ui-editor-reset-target').click();
+  await expect(frame.locator('.intro h1 br')).toHaveCount(1);
+  await expect(frame.locator('.intro h1')).toContainText('让每个声音');
+  await save(page);
+  expect((await snapshot(page)).design.pages.teacher).toEqual({});
+  expect((await snapshot(page)).design.pages.student.myLabel.text).toBe('个人中心');
 });

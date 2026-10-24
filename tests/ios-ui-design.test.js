@@ -56,6 +56,8 @@ let sent = FixtureProtocol.requests.last!
 assert(sent.url?.absoluteString == "https://class.empfreeimpro.xyz/api/student/ui-design")
 assert(sent.httpMethod == "GET")
 assert(sent.value(forHTTPHeaderField: "Origin") == "https://class.empfreeimpro.xyz")
+assert(sent.value(forHTTPHeaderField: "X-FreeImpro-UI-Text") == "1")
+assert(FixtureProtocol.requests.first!.value(forHTTPHeaderField: "X-FreeImpro-UI-Text") == nil)
 
 for (path, method) in [
     ("/api/student/ui-design", "POST"),

@@ -37,6 +37,8 @@ export function initUIDesign(page) {
   let requestVersion = 0, updateVersion = 0, requestController, authController, authPending, authenticatedAt = 0;
   let authorized = false, editing = false, selection = null, selectedElement = null;
   let overlay, hint, previewStyle, observer, frame = 0, lastSelection = '', gesture = null;
+  let textObserver, textFrame = 0;
+  const textChanges = new Map();
   const removers = [];
   const on = (target, type, handler, options) => {
     target.addEventListener(type, handler, options);
@@ -53,6 +55,7 @@ export function initUIDesign(page) {
     return Object.fromEntries(definition.targets[target].properties.map(property => {
       if (Object.hasOwn(saved, property)) return [property, saved[property]];
       const spec = UI_PROPERTIES[property];
+      if (spec.type === 'text') return [property, element.innerText];
       if (spec.type === 'color') return [property, colorValue(element, property)];
       if (property === 'x' || property === 'y') return [property, 0];
       let value;
@@ -94,7 +97,33 @@ export function initUIDesign(page) {
   function render() {
     if (disposed) return;
     style.textContent = designCSS(activeDesign(), page);
+    renderTexts();
     scheduleSelection();
+  }
+
+  function renderTexts() {
+    const desired = new Map();
+    for (const [key, target] of Object.entries(definition.targets)) {
+      const value = activeDesign().pages[page][key]?.text;
+      if (!target.properties.includes('text') || value === undefined) continue;
+      for (const element of document.querySelectorAll(target.selector)) desired.set(element, value);
+    }
+    for (const [element, change] of textChanges) {
+      if (desired.has(element) && element.isConnected) continue;
+      if (element.isConnected && element.childNodes.length === 1 && element.firstChild === change.node && element.textContent === change.text) element.replaceChildren(...change.original);
+      textChanges.delete(element);
+    }
+    for (const [element, text] of desired) {
+      let change = textChanges.get(element);
+      const unchanged = change && element.childNodes.length === 1 && element.firstChild === change.node && element.textContent === change.text;
+      if (!unchanged) {
+        change = { original: [...element.childNodes] };
+        textChanges.set(element, change);
+      } else if (change.text === text) continue;
+      change.node = document.createTextNode(text); change.text = text;
+      // Plain text only. Keep the original nodes for reset, including heading breaks.
+      element.replaceChildren(change.node);
+    }
   }
 
   async function refresh() {
@@ -110,7 +139,7 @@ export function initUIDesign(page) {
     const controller = requestController = new AbortController();
     try {
       const offline = page === 'student' && isOfflineStudent();
-      const response = await (offline ? classroomFetch : fetch)(offline ? '/api/student/ui-design' : protectedPreview ? '/api/admin/ui-design' : '/api/ui-design', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      const response = await (offline ? classroomFetch : fetch)(offline ? '/api/student/ui-design' : protectedPreview ? '/api/admin/ui-design' : '/api/ui-design', { credentials: 'same-origin', cache: 'no-store', headers: { 'X-FreeImpro-UI-Text': '1' }, signal: controller.signal });
       if (!response.ok) return;
       const data = await response.json();
       const next = validateDesign(data.design);
@@ -138,9 +167,9 @@ export function initUIDesign(page) {
       if (!match) return [];
       let distance = 0;
       for (let node = element; node && node !== match; node = node.parentElement) distance++;
-      return [{ target, element: match, distance, generic: ['page', 'main'].includes(target) ? 1 : 0 }];
+      return [{ target, element: match, distance, generic: ['page', 'main'].includes(target) ? 1 : 0, text: spec.properties.includes('text') ? 0 : 1 }];
     });
-    candidates.sort((a, b) => a.generic - b.generic || a.distance - b.distance);
+    candidates.sort((a, b) => a.generic - b.generic || a.distance - b.distance || a.text - b.text);
     return candidates[0] || null;
   }
 
@@ -279,6 +308,11 @@ export function initUIDesign(page) {
   on(document, 'visibilitychange', () => { if (document.visibilityState === 'visible') refresh(); });
   on(window, 'freeimpro-classroom-connected', refresh);
   on(window, 'freeimpro-classroom-disconnected', disconnect);
+  // Static headings can be mounted again by navigation or classroom refresh.
+  textObserver = new MutationObserver(() => {
+    if (!textFrame && !disposed) textFrame = requestAnimationFrame(() => { textFrame = 0; renderTexts(); });
+  });
+  textObserver.observe(document.querySelector('#app') || document.body, { subtree: true, childList: true, characterData: true });
   const runtime = {
     refresh,
     destroy() {
@@ -288,6 +322,9 @@ export function initUIDesign(page) {
       requestController?.abort(); authController?.abort();
       removers.forEach(remove => remove());
       observer?.disconnect(); cancelAnimationFrame(frame);
+      textObserver.disconnect(); cancelAnimationFrame(textFrame);
+      for (const [element, change] of textChanges) if (element.isConnected && element.childNodes.length === 1 && element.firstChild === change.node && element.textContent === change.text) element.replaceChildren(...change.original);
+      textChanges.clear();
       style.remove(); overlay?.remove(); hint?.remove(); previewStyle?.remove();
       delete document.documentElement.dataset.uiPage;
       delete document.documentElement.dataset.uiEditing;

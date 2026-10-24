@@ -15,6 +15,7 @@ import { validateRhythm } from '../src/rhythm-data.js';
 import { createPerformanceStore } from './performance.js';
 import { createAdmin } from './admin.js';
 import { createUIDesignStore } from './ui-design.js';
+import { legacyDesign } from './ui-design-schema.js';
 import { createStudentRecovery } from './student-recovery.js';
 import { createStudentAuth } from './student-auth.js';
 
@@ -109,7 +110,9 @@ export function createApp({ dbPath = 'data/classroom.sqlite', secureCookies = fa
       if (req.clientRole && requiredRole !== req.clientRole) throw error(403, '请使用对应身份的独立客户端。');
       if (path === '/api/ui-design') {
         if (req.method !== 'GET') throw error(405, '页面设置只能由已登录的管理员发布。');
-        send(200, uiDesign.read()); return;
+        const snapshot = uiDesign.read();
+        if (req.headers['x-freeimpro-ui-text'] !== '1') snapshot.design = legacyDesign(snapshot.design);
+        send(200, snapshot); return;
       }
       if (req.method === 'GET' && path === '/api/health') { send(200, { ok: true }); return; }
       if (req.method === 'GET' && path === '/api/image-status') { send(200, images.status(session(req).user)); return; }

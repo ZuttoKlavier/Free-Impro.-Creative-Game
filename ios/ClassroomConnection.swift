@@ -196,6 +196,7 @@ final class ClassroomConnection: NSObject, URLSessionDelegate, URLSessionTaskDel
         request.httpMethod = method; request.httpBody = data; request.timeoutInterval = path == "/api/student/characters" ? 250 : 12
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("FreeImproStudent/1 iOS", forHTTPHeaderField: "User-Agent")
+        if path == "/api/student/ui-design" { request.setValue("1", forHTTPHeaderField: "X-FreeImpro-UI-Text") }
         // The native client authenticates against the configured HTTPS origin.
         request.setValue(String(policy.origin.absoluteString.dropLast()), forHTTPHeaderField: "Origin")
         let ticket = generation

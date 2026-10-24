@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { UI_PAGES, UI_PROPERTIES, emptyDesign, validateDesign, designCSS } from '../server/ui-design-schema.js';
+import { UI_PAGES, UI_PROPERTIES, emptyDesign, validateDesign, designCSS, legacyDesign } from '../server/ui-design-schema.js';
 
 test('UI design accepts only known targets, properties, bounded integers and six-digit colors', () => {
   const valid = emptyDesign();
@@ -18,6 +18,22 @@ test('UI design accepts only known targets, properties, bounded integers and six
     { version: 1, pages: { student: { primary: { height: -1 } } } },
     JSON.parse('{"version":1,"pages":{"student":{"__proto__":{}}}}'),
   ]) assert.throws(() => validateDesign(input), error => error.status === 400);
+});
+
+test('text is bounded plain content, never CSS, and old clients retain compatible styles', () => {
+  const design = emptyDesign();
+  design.pages.teacher.title = { text: '<img src=x onerror=alert(1)>\r\n一起创作', color: '#123456' };
+  design.pages.student.myLabel = { text: '个人中心' };
+  const safe = validateDesign(design);
+  assert.equal(safe.pages.teacher.title.text, '<img src=x onerror=alert(1)>\n一起创作');
+  assert.doesNotMatch(designCSS(safe, 'teacher'), /<img|onerror|一起创作/);
+  assert.deepEqual(legacyDesign(safe), { version: 1, pages: { student: {}, teacher: { title: { color: '#123456' } } } });
+  for (const text of [null, 3, {}, 'x'.repeat(301), 'bad\u0000text']) {
+    const bad = emptyDesign(); bad.pages.teacher.title = { text };
+    assert.throws(() => validateDesign(bad), error => error.status === 400);
+  }
+  const forbidden = emptyDesign(); forbidden.pages.student.sound = { text: '不可替换作品数据' };
+  assert.throws(() => validateDesign(forbidden), error => error.status === 400);
 });
 
 test('generated CSS scopes every selector to its page and clearing a property restores the default', () => {

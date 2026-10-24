@@ -216,6 +216,20 @@ test('published settings and revision survive service restart', async t => {
   assert.equal((await f.publish({ revision: 1, design: emptyDesign() })).data.revision, 2);
 });
 
+test('published text persists, capable clients receive it and existing clients keep style-only designs', async t => {
+  const f = await fixture(t, { persistent: true }), design = emptyDesign();
+  design.pages.teacher.title = { text: '一起创作\n课堂声音', color: '#123456' };
+  design.pages.student.myLabel = { text: '个人中心' };
+  const saved = await f.publish({ revision: 0, design });
+  assert.equal(saved.status, 200);
+  const legacy = await f.request('/api/student/ui-design');
+  assert.deepEqual(legacy.data.design, { version: 1, pages: { student: {}, teacher: { title: { color: '#123456' } } } });
+  const capable = await f.request('/api/ui-design', { headers: { 'X-FreeImpro-UI-Text': '1' } });
+  assert.deepEqual(capable.data.design, design);
+  await f.restart();
+  assert.deepEqual((await f.admin('/ui-design')).data.design, design);
+});
+
 test('publication rolls back when the accompanying audit fails', async t => {
   const f = await fixture(t), store = createUIDesignStore(f.db);
   const before = store.read();
